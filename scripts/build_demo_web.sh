@@ -5,6 +5,14 @@ cd "$script_path/.."
 
 ./scripts/setup_web.sh
 
+# Keep the target directory anchored at the workspace root even though the
+# cargo invocation below runs from a member crate.
+CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-target}"
+if [[ "${CARGO_TARGET_DIR}" != /* ]]; then
+  CARGO_TARGET_DIR="${PWD}/${CARGO_TARGET_DIR}"
+fi
+export CARGO_TARGET_DIR
+
 CRATE_NAME="egui_demo_app"
 
 FEATURES="web_app"
@@ -89,7 +97,7 @@ echo "Building rust…"
 
 # Get the output directory (in the workspace it is in another location)
 # TARGET=`cargo metadata --format-version=1 | jq --raw-output .target_directory`
-TARGET="target"
+TARGET="${CARGO_TARGET_DIR}"
 
 echo "Generating JS bindings for wasm…"
 TARGET_NAME="${CRATE_NAME}.wasm"
