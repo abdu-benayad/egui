@@ -6,7 +6,13 @@ use super::text_cursor_state::{ccursor_next_word, ccursor_previous_word, slice_c
 
 /// A selected text range (could be a range of length zero).
 ///
-/// The selection is based on character count (NOT byte count!).
+/// The selection is based on logical character count (NOT byte count or visual
+/// glyph order). Sorting the cursors sorts source indices, which is also the
+/// order used for editing and clipboard text.
+///
+/// This type does not carry bidi caret affinity. On the current bidi baseline,
+/// painting a logical selection that crosses direction runs can produce an
+/// incomplete visual span.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
 pub struct CCursorRange {
@@ -48,7 +54,7 @@ impl CCursorRange {
         Self::two(galley.begin(), galley.end())
     }
 
-    /// The range of selected character indices.
+    /// The range of selected logical character indices.
     pub fn as_sorted_char_range(&self) -> core::ops::Range<CharIndex> {
         let [start, end] = self.sorted_cursors();
         core::ops::Range {
@@ -87,7 +93,7 @@ impl CCursorRange {
         (p.index, p.prefer_next_row) <= (s.index, s.prefer_next_row)
     }
 
-    /// returns the two ends ordered
+    /// Return the two ends ordered by logical source index.
     #[inline]
     pub fn sorted_cursors(&self) -> [CCursor; 2] {
         if self.is_sorted() {
@@ -97,6 +103,7 @@ impl CCursorRange {
         }
     }
 
+    /// Slice the selected text in logical source order.
     pub fn slice_str<'s>(&self, text: &'s str) -> &'s str {
         let [min, max] = self.sorted_cursors();
         slice_char_range(text, min.index..max.index)

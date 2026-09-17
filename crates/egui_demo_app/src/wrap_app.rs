@@ -191,6 +191,10 @@ impl WrapApp {
         // This gives us image support:
         egui_extras::install_image_loaders(&cc.egui_ctx);
 
+        if let Err(error) = egui_demo_lib::rtl_font_fixtures::install(&cc.egui_ctx) {
+            log::error!("failed to install RTL demo fonts: {error}");
+        }
+
         #[cfg(feature = "accessibility_inspector")]
         cc.egui_ctx
             .add_plugin(crate::accessibility_inspector::AccessibilityInspectorPlugin::default());

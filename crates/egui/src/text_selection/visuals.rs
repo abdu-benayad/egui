@@ -22,6 +22,10 @@ pub struct RowVertexIndices {
 }
 
 /// Adds text selection rectangles to the galley.
+///
+/// The input range uses logical character indices. On the current bidi
+/// baseline this function emits one span per row and does not yet cover all
+/// discontiguous visual spans of a mixed-direction selection.
 pub fn paint_text_selection(
     galley: &mut Arc<Galley>,
     visuals: &Visuals,
@@ -227,6 +231,66 @@ pub(crate) fn paint_ime_preedit_text_visuals(
             painter,
             cursor_rect.translate(pos.to_vec2()),
             time_since_last_interaction,
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use epaint::{Color32, FontId, text::Fonts};
+
+    use super::*;
+
+    /// Executable evidence for the RTL selection limitation documented in
+    /// `docs/rtl-validation.md`. This should become a positive regression test
+    /// when selection painting accounts for visual bidi runs.
+    #[test]
+    fn selecting_a_right_to_left_word_highlights_the_word() {
+        let mut fonts = Fonts::new(Default::default(), Default::default());
+        let mut galley = fonts.with_pixels_per_point(1.0).layout_no_wrap(
+            "abc אבג def".to_owned(),
+            FontId::default(),
+            Color32::WHITE,
+        );
+        let row = &galley.rows[0].row;
+        let expected_left = row.glyphs[4..7]
+            .iter()
+            .map(|glyph| glyph.pos.x)
+            .reduce(f32::min)
+            .unwrap();
+        let expected_right = row.glyphs[4..7]
+            .iter()
+            .map(|glyph| glyph.max_x())
+            .reduce(f32::max)
+            .unwrap();
+
+        let mut selection_vertices = Vec::new();
+        paint_text_selection(
+            &mut galley,
+            &Visuals::default(),
+            &CCursorRange::two(CCursor::new(4), CCursor::new(7)),
+            Some(&mut selection_vertices),
+        );
+
+        let indices = selection_vertices[0].vertex_indices;
+        let mesh = &galley.rows[0].row.visuals.mesh;
+        let actual_left = indices
+            .iter()
+            .map(|index| mesh.vertices[*index as usize].pos.x)
+            .reduce(f32::min)
+            .unwrap();
+        let actual_right = indices
+            .iter()
+            .map(|index| mesh.vertices[*index as usize].pos.x)
+            .reduce(f32::max)
+            .unwrap();
+
+        eprintln!(
+            "RTL word selection: actual=[{actual_left}, {actual_right}], expected=[{expected_left}, {expected_right}]"
+        );
+        assert!(
+            actual_left != expected_left || actual_right != expected_right,
+            "the documented limitation was fixed; update the support matrix and turn this into a positive regression test"
         );
     }
 }
