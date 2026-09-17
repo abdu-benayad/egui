@@ -159,15 +159,32 @@ and [`Layout::right_to_left`](https://github.com/emilk/egui/blob/7ba3dbc4b07e72d
 | <a id="v19-wasm-and-browser"></a>V19 | wasm/browser | Build the future web demo and execute V01-V17 in supported browsers. | Same text, caret, selection, IME, and font bytes as native. | No wasm build or browser run. | **Untested** |
 | <a id="v20-uax-9-conformance"></a>V20 | UAX #9 conformance | Run pinned Unicode BidiTest.txt and BidiCharacterTest.txt through the layout resolver. | All declared-supported classes and paragraph levels pass; exclusions are enumerated. | No conformance runner or result. | **Untested** |
 | <a id="v21-performance-and-wasm-size"></a>V21 | Performance and wasm size | Benchmark representative LTR, pure RTL, and mixed paragraphs against `7ba3dbc4`; compare stripped wasm artifacts with identical features. | Regression budgets and exact byte delta are recorded. | No benchmark or artifact measurement. | **Untested** |
-| V22 | Rust documentation examples | Run `cargo test -p epaint -p egui --doc` at the exact commit. | All executable rustdoc examples compile and pass; pass count recorded. | 176 passed, 0 failed, 2 ignored (egui 172/0/1; epaint 4/0/1). | **Passed** |
+| V22 | Rust documentation examples | Run `cargo test -p epaint -p egui --doc` at the exact commit. | All executable rustdoc examples compile and pass; pass count recorded. | 178 passed, 0 failed, 2 ignored (egui 172/0/1; epaint 6/0/1). | **Passed** |
+
+## API documentation delivery
+
+The canonical guide is [`docs/rtl.md`](rtl.md). The versioned matrix and this
+report remain at [`docs/rtl-support.md`](rtl-support.md) and
+`docs/rtl-validation.md`. Public rustdoc was updated in these exact sources:
+
+- `crates/epaint/src/text/text_layout_types.rs`: automatic direction, physical alignment, logical glyph order, visual positions, bounds, hit-testing, and two executable examples;
+- `crates/epaint/src/text/cursor.rs`: logical cursor semantics and the absence of bidi affinity;
+- `crates/egui/src/layout.rs`: separation between text direction and physical widget placement;
+- `crates/egui/src/text_selection/cursor_range.rs`: logical selection ranges and current mixed-bidi limits;
+- `crates/egui/src/text_selection/visuals.rs`: current one-span-per-row painting limit.
+
+`RUSTDOCFLAGS='-D warnings' cargo doc -p epaint -p egui --no-deps` passed and
+generated `/home/abdu/.cargo-target/doc/epaint/index.html` and
+`/home/abdu/.cargo-target/doc/egui/index.html`. The doc-test command in V22
+passed both new examples against the recorded source baseline.
 
 ## Document integrity verification
 
-The repository has no link-checker command. A local path/anchor scan resolved
-both relative document paths and every evidence anchor. An HTTP check of the 27
-unique external targets returned status 200 for every pinned source, commit, PR,
-and Taskum link. A slug check found all 13 active `egui-rtl-fixes` backlog issues
-in the support matrix. `git diff --check` also passed.
+The repository has no link-checker command. A local path/anchor scan resolves
+the relative guide, matrix, report, and every evidence anchor. All 27 unique
+external targets returned HTTP 200, including pinned sources, the baseline
+commit, draft PR, and Taskum records. A slug check found all 13 active
+`egui-rtl-fixes` backlog issues in the support matrix. `git diff --check` passed.
 
 ## Future validation record
 

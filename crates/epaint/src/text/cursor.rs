@@ -2,13 +2,19 @@
 
 use super::index::CharIndex;
 
-/// Character cursor.
+/// A cursor at a logical character boundary.
 ///
 /// The default cursor is zero.
+///
+/// The index follows source-text order, including in bidirectional text. It is
+/// not an index into the visual left-to-right order of glyphs. This type does
+/// not currently carry bidi caret affinity, so one logical boundary cannot
+/// distinguish the two visual caret positions that may exist at a direction
+/// change.
 #[derive(Clone, Copy, Debug, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
 pub struct CCursor {
-    /// Character offset (NOT byte offset!).
+    /// Logical character offset (NOT byte offset or visual glyph offset!).
     pub index: CharIndex,
 
     /// If this cursors sits right at the border of a wrapped row break (NOT paragraph break)
@@ -93,9 +99,11 @@ impl core::ops::SubAssign<usize> for CCursor {
     }
 }
 
-/// Row/column cursor.
+/// A logical row/column cursor.
 ///
 /// This refers to rows and columns in layout terms--text wrapping creates multiple rows.
+/// `column` follows source-text order even when glyph x positions run in the
+/// opposite direction.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
 pub struct LayoutCursor {
@@ -104,7 +112,7 @@ pub struct LayoutCursor {
     /// (a paragraph is text separated by `\n`).
     pub row: usize,
 
-    /// Character based (NOT bytes).
+    /// Logical character based (NOT bytes or visual glyph order).
     /// It is fine if this points to something beyond the end of the current row.
     /// When moving up/down it may again be within the next row.
     pub column: CharIndex,
