@@ -1965,6 +1965,20 @@ mod tests {
     }
 
     #[test]
+    fn rect_without_leading_space_starts_at_the_leftmost_glyph() {
+        let mut fonts = test_fonts();
+        let galley = layout_simple(&mut fonts, "אב");
+        let row = &galley.rows[0];
+        let leftmost = row
+            .glyphs
+            .iter()
+            .map(|g| g.pos.x)
+            .fold(f32::INFINITY, f32::min);
+        assert_eq!(leftmost, 0.0);
+        assert_eq!(row.rect_without_leading_space(), row.rect());
+    }
+
+    #[test]
     fn color_raster_glyph_is_not_tinted() {
         let rasterizer = GlyphRasterizer::new(|request: &GlyphRasterizerRequest<'_>| {
             (request.cluster == "한").then(color_raster_glyph)
