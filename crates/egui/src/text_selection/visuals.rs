@@ -1,16 +1,16 @@
 use std::sync::Arc;
 
-use emath::Pos2;
+use emath::{Pos2, Rangef};
 use epaint::{
     Stroke,
     text::{
-        CharIndex,
+        CharIndex, Glyph, Row,
         cursor::{CCursor, LayoutCursor},
     },
 };
 
 use crate::{
-    Galley, Painter, Rect, Ui, Visuals, pos2, text_selection::text_cursor_state::cursor_rect, vec2,
+    Galley, Painter, Rect, Ui, Visuals, text_selection::text_cursor_state::cursor_rect, vec2,
 };
 
 use super::CCursorRange;
@@ -45,37 +45,23 @@ pub fn paint_text_selection(
 
     for ri in min.row..=max.row {
         let placed_row = &mut galley.rows[ri];
+        let ends_with_newline = placed_row.ends_with_newline;
         let row = Arc::make_mut(&mut placed_row.row);
 
-        let left = if ri == min.row {
-            row.x_offset(min.column)
+        let from = (ri == min.row).then_some(min.column);
+        let to = (ri == max.row).then_some(max.column);
+        let newline_size = if ends_with_newline {
+            row.height() / 2.0 // visualize that we select the newline
         } else {
             0.0
         };
-        let right = if ri == max.row {
-            row.x_offset(max.column)
-        } else {
-            let newline_size = if placed_row.ends_with_newline {
-                row.height() / 2.0 // visualize that we select the newline
-            } else {
-                0.0
-            };
-            row.size.x + newline_size
-        };
-        // In right-to-left text the cursor at the smaller char index is the one further right:
-        let (left, right) = (left.min(right), left.max(right));
-
-        let rect = Rect::from_min_max(pos2(left, 0.0), pos2(right, row.size.y));
+        let spans = selection_spans(row, from, to, newline_size);
         let mesh = &mut row.visuals.mesh;
 
         if !row.glyphs.is_empty() {
             // Change color of the selected text:
-            let first_glyph_index = if ri == min.row { min.column.0 } else { 0 };
-            let last_glyph_index = if ri == max.row {
-                max.column.0
-            } else {
-                row.glyphs.len()
-            };
+            let first_glyph_index = from.map_or(0, |column| column.0);
+            let last_glyph_index = to.map_or(row.glyphs.len(), |column| column.0);
 
             let first_vertex_index = row
                 .glyphs
@@ -91,47 +77,108 @@ pub fn paint_text_selection(
             }
         }
 
-        // Time to insert the selection rectangle into the row mesh.
-        // It should be on top (after) of any background in the galley,
+        // Time to insert the selection rectangles into the row mesh.
+        // They should be on top (after) of any background in the galley,
         // but behind (before) any glyphs. The row visuals has this information:
         let glyph_index_start = row.visuals.glyph_index_start;
 
-        // Start by appending the selection rectangle to end of the mesh, as two triangles (= 6 indices):
+        // Start by appending the rectangles to the end of the mesh, two triangles (= 6 indices) each:
         let num_indices_before = mesh.indices.len();
-        mesh.add_colored_rect(rect, background_color);
-        assert_eq!(
-            num_indices_before + 6,
+        for span in &spans {
+            let rect = Rect::from_x_y_ranges(*span, 0.0..=row.size.y);
+            mesh.add_colored_rect(rect, background_color);
+        }
+        debug_assert_eq!(
+            num_indices_before + 6 * spans.len(),
             mesh.indices.len(),
-            "We expect exactly 6 new indices"
+            "We expect exactly 6 new indices per rectangle"
         );
 
         // Copy out the new triangles:
-        let selection_triangles = [
-            mesh.indices[num_indices_before],
-            mesh.indices[num_indices_before + 1],
-            mesh.indices[num_indices_before + 2],
-            mesh.indices[num_indices_before + 3],
-            mesh.indices[num_indices_before + 4],
-            mesh.indices[num_indices_before + 5],
-        ];
+        let selection_triangles = mesh.indices[num_indices_before..].to_vec();
 
-        // Move every old triangle forwards by 6 indices to make room for the new triangle:
-        for i in (glyph_index_start..num_indices_before).rev() {
-            mesh.indices.swap(i, i + 6);
-        }
-        // Put the new triangle in place:
-        mesh.indices[glyph_index_start..glyph_index_start + 6]
-            .clone_from_slice(&selection_triangles);
+        // Move them in front of the glyphs, and every old triangle after them:
+        mesh.indices[glyph_index_start..].rotate_right(selection_triangles.len());
 
         row.visuals.mesh_bounds = mesh.calc_bounds();
 
         if let Some(new_vertex_indices) = &mut new_vertex_indices {
-            new_vertex_indices.push(RowVertexIndices {
-                row: ri,
-                vertex_indices: selection_triangles,
-            });
+            for triangles in selection_triangles.chunks_exact(6) {
+                new_vertex_indices.push(RowVertexIndices {
+                    row: ri,
+                    vertex_indices: [
+                        triangles[0],
+                        triangles[1],
+                        triangles[2],
+                        triangles[3],
+                        triangles[4],
+                        triangles[5],
+                    ],
+                });
+            }
         }
     }
+}
+
+/// The horizontal spans a selection covers on `row`.
+///
+/// `from`/`to` are the selection's columns on this row, or `None` where it
+/// began on an earlier row / continues past this one; a continuing selection
+/// also covers `newline_size` past the row's end.
+///
+/// A left-to-right row is one span between two carets. In a row with
+/// right-to-left text the selected characters need not be contiguous on
+/// screen, so the spans are built from the selected glyphs themselves.
+fn selection_spans(
+    row: &Row,
+    from: Option<CharIndex>,
+    to: Option<CharIndex>,
+    newline_size: f32,
+) -> Vec<Rangef> {
+    let past_row_end = row.size.x + newline_size;
+
+    if !row.glyphs.iter().any(Glyph::is_rtl) {
+        let left = from.map_or(0.0, |column| row.x_offset(column));
+        let right = to.map_or(past_row_end, |column| row.x_offset(column));
+        return vec![Rangef::new(left, right)];
+    }
+
+    let first = from.map_or(0, |column| column.0);
+    let last = to.map_or(row.glyphs.len(), |column| column.0);
+    let selected = |i: usize| first <= i && i < last;
+
+    // The advancing glyphs in the order they appear on screen. Marks and
+    // continuation glyphs have no width of their own and are covered with their base.
+    let mut visual: Vec<usize> = (0..row.glyphs.len())
+        .filter(|&i| 0.0 < row.glyphs[i].advance_width)
+        .collect();
+    visual.sort_by(|&a, &b| row.glyphs[a].pos.x.total_cmp(&row.glyphs[b].pos.x));
+
+    // Each run of selected glyphs that are neighbors on screen is one span,
+    // reaching the next glyph on screen (letter spacing included), the way a
+    // left-to-right selection reaches the next caret.
+    let mut spans: Vec<Rangef> = Vec::new();
+    let mut k = 0;
+    while k < visual.len() {
+        if !selected(visual[k]) {
+            k += 1;
+            continue;
+        }
+        let run_start = k;
+        while k < visual.len() && selected(visual[k]) {
+            k += 1;
+        }
+        let left = row.glyphs[visual[run_start]].pos.x;
+        let right = visual.get(k).map_or_else(
+            || row.glyphs[visual[k - 1]].max_x(),
+            |&next| row.glyphs[next].pos.x,
+        );
+        spans.push(Rangef::new(left, right));
+    }
+    if to.is_none() && 0.0 < newline_size {
+        spans.push(Rangef::new(row.size.x, past_row_end));
+    }
+    spans
 }
 
 #[expect(clippy::too_many_arguments)]
@@ -243,24 +290,19 @@ fn paint_underlines(
         let placed_row = &galley.rows[ri];
         let row = &placed_row.row;
 
-        let left = if ri == min.row {
-            row.x_offset(min.column)
-        } else {
-            0.0
-        };
-        let right = if ri == max.row {
-            row.x_offset(max.column)
-        } else {
-            row.size.x
-        };
-        let (left, right) = (left.min(right), left.max(right));
-
+        let from = (ri == min.row).then_some(min.column);
+        let to = (ri == max.row).then_some(max.column);
         let offset_y = placed_row.pos.y + row.size.y;
 
-        painter.line_segment(
-            [pos + vec2(left, offset_y), pos + vec2(right, offset_y)],
-            stroke,
-        );
+        for span in selection_spans(row, from, to, 0.0) {
+            painter.line_segment(
+                [
+                    pos + vec2(span.min, offset_y),
+                    pos + vec2(span.max, offset_y),
+                ],
+                stroke,
+            );
+        }
     }
 }
 
@@ -316,5 +358,141 @@ pub fn paint_text_cursor(
         ui.request_repaint_after_secs(wake_in);
     } else {
         paint_cursor_end(painter, ui.visuals(), primary_cursor_rect);
+    }
+}
+
+#[cfg(test)]
+#[cfg(feature = "default_fonts")]
+mod tests {
+    use std::sync::Arc;
+
+    use epaint::text::{FontDefinitions, FontId, Fonts, TextOptions};
+
+    use super::*;
+    use crate::Color32;
+
+    fn layout(text: &str) -> Arc<Galley> {
+        let mut fonts = Fonts::new(TextOptions::default(), FontDefinitions::default());
+        fonts.with_pixels_per_point(1.0).layout_no_wrap(
+            text.to_owned(),
+            FontId::proportional(14.0),
+            Color32::WHITE,
+        )
+    }
+
+    /// The x range of every selection rectangle painted on `row`, from the vertices it added.
+    fn painted_spans(galley: &Galley, painted: &[RowVertexIndices], row: usize) -> Vec<Rangef> {
+        let mesh = &galley.rows[row].row.visuals.mesh;
+        painted
+            .iter()
+            .filter(|p| p.row == row)
+            .map(|p| {
+                let xs = p.vertex_indices.map(|vi| mesh.vertices[vi as usize].pos.x);
+                Rangef::new(
+                    xs.iter().copied().fold(f32::INFINITY, f32::min),
+                    xs.iter().copied().fold(f32::NEG_INFINITY, f32::max),
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn selecting_a_right_to_left_word_highlights_the_word() {
+        let mut galley = layout("abc אבג def");
+        let hebrew = &galley.rows[0].row.glyphs[4..7];
+        let left = hebrew.iter().map(|g| g.pos.x).fold(f32::INFINITY, f32::min);
+        let right = hebrew
+            .iter()
+            .map(Glyph::max_x)
+            .fold(f32::NEG_INFINITY, f32::max);
+
+        let mut painted = Vec::new();
+        paint_text_selection(
+            &mut galley,
+            &Visuals::default(),
+            &CCursorRange::two(CCursor::new(4), CCursor::new(7)),
+            Some(&mut painted),
+        );
+
+        let spans = painted_spans(&galley, &painted, 0);
+        assert_eq!(spans.len(), 1, "the three letters are contiguous on screen");
+        let next_on_screen = galley.rows[0].row.glyphs[7].pos.x; // the space after them
+        assert!(right <= next_on_screen);
+        assert_eq!(spans[0], Rangef::new(left, next_on_screen));
+        assert!(
+            0.0 < spans[0].span(),
+            "the selection has width, not two carets at one x"
+        );
+    }
+
+    #[test]
+    fn selecting_spaced_right_to_left_letters_leaves_no_holes() {
+        let mut fonts = Fonts::new(TextOptions::default(), FontDefinitions::default());
+        let mut job = epaint::text::LayoutJob::simple(
+            "אבג".to_owned(),
+            FontId::proportional(14.0),
+            Color32::WHITE,
+            f32::INFINITY,
+        );
+        job.sections[0].format.extra_letter_spacing = 3.0;
+        let mut galley = fonts.with_pixels_per_point(1.0).layout_job(job);
+
+        let glyphs = &galley.rows[0].row.glyphs;
+        let left = glyphs.iter().map(|g| g.pos.x).fold(f32::INFINITY, f32::min);
+        let right = glyphs
+            .iter()
+            .map(Glyph::max_x)
+            .fold(f32::NEG_INFINITY, f32::max);
+        assert!(
+            glyphs.iter().map(|g| g.advance_width).sum::<f32>() < right - left,
+            "the letter spacing is between the letters"
+        );
+
+        let mut painted = Vec::new();
+        paint_text_selection(
+            &mut galley,
+            &Visuals::default(),
+            &CCursorRange::two(CCursor::new(0), CCursor::new(3)),
+            Some(&mut painted),
+        );
+        assert_eq!(
+            painted_spans(&galley, &painted, 0),
+            [Rangef::new(left, right)],
+            "one rectangle, letter spacing included"
+        );
+    }
+
+    #[test]
+    fn selecting_everything_in_two_right_to_left_rows_covers_both() {
+        let mut galley = layout("אב\nגד");
+        let mut painted = Vec::new();
+        paint_text_selection(
+            &mut galley,
+            &Visuals::default(),
+            &CCursorRange::two(CCursor::new(0), CCursor::new(5)),
+            Some(&mut painted),
+        );
+
+        for (ri, continues) in [(0, true), (1, false)] {
+            let row = &galley.rows[ri].row;
+            let spans = painted_spans(&galley, &painted, ri);
+            let covered = Rangef::new(
+                spans.iter().map(|s| s.min).fold(f32::INFINITY, f32::min),
+                spans
+                    .iter()
+                    .map(|s| s.max)
+                    .fold(f32::NEG_INFINITY, f32::max),
+            );
+            assert_eq!(covered.min, 0.0, "row {ri} is selected from its left edge");
+            let expected_right = if continues {
+                row.size.x + row.height() / 2.0 // the newline marker
+            } else {
+                row.size.x
+            };
+            assert_eq!(
+                covered.max, expected_right,
+                "row {ri} is selected to its right edge"
+            );
+        }
     }
 }
