@@ -283,23 +283,38 @@ fn layout_shaped_run(
         }
         ctx.is_first_glyph_in_section = false;
 
+        let first_glyph = paragraph.glyphs.len();
         let as_one_bitmap = if char_count < glyph_range.len() {
             emit_cluster_bitmap(fonts, &shaped, glyph_range.clone(), ctx, paragraph)
         } else {
             None
         };
-        let emitted = as_one_bitmap.unwrap_or_else(|| {
-            emit_cluster_glyphs(
-                fonts,
-                &shaped,
-                glyph_range,
-                byte_range.clone(),
-                ctx,
-                paragraph,
-            )
-        });
+        let emitted = as_one_bitmap
+            .unwrap_or_else(|| emit_cluster_glyphs(fonts, &shaped, glyph_range, ctx, paragraph));
 
-        emit_continuation_glyphs(ctx, paragraph, run_text, byte_range, emitted, face_metrics);
+        emit_continuation_glyphs(
+            ctx,
+            paragraph,
+            run_text,
+            byte_range.clone(),
+            emitted,
+            face_metrics,
+        );
+
+        // The k-th glyph of the finished cluster carries its k-th character, whichever
+        // branch emitted it and whatever the shaper or the font dropped along the way.
+        // Every reader of a row's text, the accessibility value included, sees a mark
+        // as the mark and not as its base. When a natively right-to-left script stacks
+        // several marks on one base the shaper hands them over reversed, so their
+        // characters may be permuted among themselves; the base and the set of marks
+        // are right either way.
+        let cluster_text = run_text.get(byte_range).unwrap_or_default();
+        for (glyph, chr) in paragraph.glyphs[first_glyph..]
+            .iter_mut()
+            .zip(cluster_text.chars())
+        {
+            glyph.chr = chr;
+        }
     }
 }
 
@@ -412,12 +427,8 @@ fn emit_cluster_bitmap(
 /// order. Positions still come from the shaper's pen, which walks the cluster
 /// in the shaper's order.
 ///
-/// The k-th glyph emitted carries the k-th character of `cluster_bytes`, so a
-/// mark's [`Glyph::chr`] is the mark and not its base (which is what every
-/// reader of the row's text, the accessibility value included, sees). When a
-/// natively right-to-left script stacks several marks on one base the shaper
-/// hands them over reversed, so their characters may be permuted among
-/// themselves; the base and the set of marks are right either way.
+/// Every glyph is emitted under the cluster's first character; the caller
+/// assigns each glyph its own character once the cluster is complete.
 ///
 /// A mark is drawn where the shaper put it, but laid out at the end of its
 /// cluster like a continuation glyph: [`Glyph::pos`] is the cluster's trailing
@@ -428,7 +439,6 @@ fn emit_cluster_glyphs(
     fonts: &mut FontsImpl,
     shaped: &ShapedRun<'_>,
     glyph_range: Range<usize>,
-    cluster_bytes: Range<usize>,
     ctx: &ShapingContext,
     paragraph: &mut Paragraph,
 ) -> usize {
@@ -441,7 +451,6 @@ fn emit_cluster_glyphs(
     } = *shaped;
     let px_scale = face_metrics.px_scale_factor;
     let mut emitted = 0;
-    let mut cluster_chars = run_text.get(cluster_bytes).unwrap_or_default().chars();
 
     let cluster_origin_px = paragraph.cursor_x_px;
     let mut cluster_end_px = cluster_origin_px;
@@ -486,9 +495,7 @@ fn emit_cluster_glyphs(
         let x_offset_px = pos.x_offset as f32 * px_scale;
         let y_offset_px = -(pos.y_offset as f32 * px_scale); // harfrust Y+ up → screen Y+ down
 
-        let chr = cluster_chars
-            .next()
-            .unwrap_or_else(|| shaped.char_at(cluster));
+        let chr = shaped.char_at(cluster);
 
         // Tab is a layout concept, not a glyph — the shaper doesn't know about tab stops.
         // Override the advance width using the font's configured tab size.
@@ -2219,6 +2226,29 @@ mod tests {
             let mark = placed_row.row.glyphs[1];
             assert_eq!(mark.pos.x, placed_row.row.glyphs[0].max_x());
         }
+    }
+
+    #[test]
+    #[cfg(feature = "default_fonts")]
+    fn a_mark_the_font_lacks_still_counts_as_its_own_character() {
+        let mut fonts = FontsImpl::new(TextOptions::default(), hack_only());
+        // Hack has the acute but not U+1AB0, which the shaper maps to `.notdef` and the
+        // emitter drops; the row still has one glyph per character, each with its own.
+        let galley = layout_simple(&mut fonts, "q\u{1AB0}\u{301}");
+        let row = &galley.rows[0].row;
+        assert_eq!(row.text(), "q\u{1AB0}\u{301}");
+        assert_eq!(row.glyphs.len(), 3);
+        assert!(
+            row.glyphs[1..]
+                .iter()
+                .all(|glyph| glyph.advance_width == 0.0)
+        );
+        let drawn = row
+            .glyphs
+            .iter()
+            .filter(|glyph| !glyph.uv_rect.is_nothing())
+            .count();
+        assert_eq!(drawn, 2, "the q and the acute");
     }
 
     #[test]
