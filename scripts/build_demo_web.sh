@@ -3,6 +3,12 @@ set -eu
 script_path=$( cd "$(dirname "${BASH_SOURCE[0]}")" ; pwd -P )
 cd "$script_path/.."
 
+# Keep a caller-supplied relative target directory anchored at the workspace
+# root even though the cargo invocation below runs from a member crate.
+if [[ -n "${CARGO_TARGET_DIR:-}" && "${CARGO_TARGET_DIR}" != /* ]]; then
+  export CARGO_TARGET_DIR="${PWD}/${CARGO_TARGET_DIR}"
+fi
+
 ./scripts/setup_web.sh
 
 CRATE_NAME="egui_demo_app"
@@ -89,7 +95,7 @@ echo "Building rust…"
 
 # Get the output directory (in the workspace it is in another location)
 # TARGET=`cargo metadata --format-version=1 | jq --raw-output .target_directory`
-TARGET="target"
+TARGET="${CARGO_TARGET_DIR:-target}"
 
 echo "Generating JS bindings for wasm…"
 TARGET_NAME="${CRATE_NAME}.wasm"

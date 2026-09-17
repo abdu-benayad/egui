@@ -165,29 +165,82 @@ The package listing contained all three TTFs, all three license files, the
 manifest, and `rtl_font_fixtures.rs`. The exact wasm check passed. No browser or
 pixel-rendering claim is derived from compilation.
 
+<a id="e6-interactive-demo"></a>
+## E6: interactive native and browser demo
+
+Metadata: source baseline and fixture versions are recorded above; the demo
+changes were run on 2026-09-17. Native was Linux x86_64 with wgpu/Vulkan on an
+NVIDIA GeForce GTX 1050 Ti, NVIDIA driver 535.309.01. Browser was headless
+Google Chrome 150.0.7871.128 on Linux using glow/WebGL 2 through ANGLE
+SwiftShader. The wasm SHA-256 for that browser run was
+`ffdedd27a62e17f56b2ddaca61b64928b5d8f518cfa9c6e30484a5e787736999`.
+
+Commands and actions:
+
+```sh
+cargo test -p egui_demo_lib rtl_demo -- --nocapture
+cargo run -p egui_demo_app
+CARGO_TARGET_DIR=target bash scripts/build_demo_web.sh
+bash scripts/start_server.sh
+# Additional browser-rendered build after the exact wgpu build:
+CARGO_TARGET_DIR=target bash scripts/build_demo_web.sh --glow
+```
+
+Open **RTL text**, inspect the display and layout samples, scroll to TextEdit,
+then press Ctrl+A in the four-line editor. The same steps were sent to Chrome
+through the DevTools input protocol. The exact wgpu web build passed after
+`build_demo_web.sh` was corrected to keep a relative `CARGO_TARGET_DIR`
+anchored at the workspace root. Headless Chrome could not present its WebGPU
+swap-chain image, so the recorded browser interaction used the additional glow
+build; this does not validate browser WebGPU rendering.
+
+Expected: the pinned scripts render without positive-sample replacement boxes;
+mixed Hebrew/European digits preserve internal direction; Ctrl+A selects every
+logical character and paints every row completely; unsupported U+1AB0 remains
+an explicit missing-glyph entry; physical alignment and widget order match the
+selected controls.
+
+Observed: all 3 `rtl_demo` tests passed. The layout probe recorded
+`q\u{1AB0}\u{301}` as row text `qqq`, confirming the known character-identity
+failure rather than accepting it. The event test confirmed the Ctrl+A logical
+range covers the entire four-line string. Native and browser screenshots show
+Arabic, Persian, Urdu, Hebrew, Latin, digits, punctuation, marks, physical
+right alignment, truncation, and right-to-left widget placement. Both Ctrl+A
+screenshots show incomplete mixed-bidi highlight geometry even though the
+logical range is complete. Native and browser font providers supplied `漢`;
+the deterministic provider-free snapshot shows the expected replacement box.
+
+Artifacts:
+
+- native display: [`rtl-demo-native-wgpu.png`](rtl-demo-native-wgpu.png), SHA-256 `6abc1331570a9beca4d8b0f9ba15f16b6afbd1d54c55ad7992ba620983c01ffb`;
+- native Ctrl+A: [`rtl-demo-native-wgpu-select-all.png`](rtl-demo-native-wgpu-select-all.png), SHA-256 `30ac34c4275f3bdf28e8e848c51667225561336b72e65c05f235423f1f763249`;
+- browser display: [`rtl-demo-web-glow.png`](rtl-demo-web-glow.png), SHA-256 `1ac8882797bc85c19dcc01851c879408551ddf4c4b319041ee3e26694b55fde2`;
+- browser Ctrl+A: [`rtl-demo-web-glow-select-all.png`](rtl-demo-web-glow-select-all.png), SHA-256 `687be662c608c0229ca72f68cab14fe6014bd0fe9b7a86bd984381f479bdc94f`;
+- provider-free snapshot: `crates/egui_demo_lib/tests/snapshots/rtl_demo/static.png`.
+
 ## Per-case checklist
 
 | ID | Sample or operation | Exact steps | Expected result | Observed result | Status / method |
 | --- | --- | --- | --- | --- | --- |
-| V01 | `אב 12` | Run `cargo test -p epaint rtl_rows_are_placed_in_visual_order -- --nocapture`; repeat E2 with Noto Sans Hebrew. | Hebrew reads RTL; `12` reads LTR. | Expected x ordering passed with bundled `.notdef` and real Hebrew glyphs. | **Passed**, E1/E2 |
+| V01 | `אב 12` | Run the layout test and inspect the pinned-font demo on native and browser. | Hebrew reads RTL; `12` reads LTR. | Expected x ordering passed with real Hebrew glyphs on both rendered platforms. | **Passed**, E1/E2/E6 |
 | V02 | `ab אב` | Run `cargo test -p epaint rtl_rows_are_placed_in_visual_order -- --nocapture`. | Latin remains LTR; Hebrew word is visually RTL. | Passed with `.notdef` Hebrew glyphs. | **Passed for ordering**, E1 |
 | V03 | `אב` pointer/caret | Run `cargo test -p epaint rtl_cursor_sits_on_the_right_side_of_its_glyph -- --nocapture`. | All three boundaries round-trip. | 1/1 passed. | **Passed**, E1 |
 | V04 | End caret in `אב 12` | Run the first E3 regression probe. | End caret is at x=`15.896`, after logical `2`. | x=`32.96875`. | **Failed**, E3 |
-| V05 | Select `אבג` in `abc אבג def` | Run the egui E3 regression probe for range 4..7. | Highlight x span `[25, 46]`. | Zero-width `[46, 46]`. | **Failed**, E3 |
-| V06 | Select all in `אב\nגד` | Select logical range 0..5 and inspect both row rectangles. | Both visual rows fully covered; first includes newline marker. | Not run. | **Untested** |
+| V05 | Select `אבג` in `abc אבג def` | Run the E3 range probe; the demo includes the same mixed line and exact drag instructions. | Highlight x span `[25, 46]`. | Probe produced zero-width `[46, 46]`; demo retains the failing case. | **Failed**, E3/E6 |
+| V06 | Multiline RTL select-all | Focus the four-line native/browser demo editor and press Ctrl+A; compare logical range and pixels. | Every logical character is selected and every visual row is fully covered. | Automated logical range passed; native and Chrome pixels show incomplete row coverage. | **Failed for painting**, E6 |
 | V07 | Arabic `ب` and `بب` | Run E2 with pinned Noto Naskh Arabic. | Joined text uses contextual forms and visual RTL order. | Passed. | **Passed for this font/sample**, E2 |
 | V08 | Arabic mark `بِ` | Run E2 and compare `Row::text()` with source. | Exact source reconstruction and stable cluster geometry. | Returned `بب`; mark identity lost. | **Failed**, E2 |
-| V09 | Dropped unsupported combining mark | With the future pinned fixture, lay out `q\u{1AB0}\u{301}` and inspect row text and visible glyph count. | Text preserves all characters; unsupported mark is an explicit zero-width missing glyph. | Not run on this baseline. | **Untested** |
-| <a id="v10-narrow-marked-wrapping"></a>V10 | Marked text under narrow wrapping | Wrap two marked graphemes below one base glyph's width. | Break only between grapheme clusters; each row retains its base and mark. | Not run. | **Untested** |
-| V11 | Spaced RTL selection | Add positive letter spacing to `אבג`, select all, inspect rectangle coverage. | One continuous visual span including spacing. | Not run. | **Untested** |
-| <a id="v12-wrapping-alignment-and-truncation"></a>V12 | RTL wrapping, physical alignment, justification, truncation | Exercise narrow pure/mixed rows at `Align::LEFT/Center/RIGHT`, justified rows, max rows, and ellipsis. | No cluster split or dropped run; physical alignment is exact and documented. | Not run. | **Untested** |
+| V09 | Dropped unsupported combining mark | Run `rtl_demo_unsupported_combining_mark_is_recorded` for `q\u{1AB0}\u{301}` and inspect the demo. | Text preserves all characters; unsupported mark is an explicit zero-width missing glyph. | Provider-free row text was `qqq`; source identity was lost. | **Failed**, E6 |
+| <a id="v10-narrow-marked-wrapping"></a>V10 | Marked text under narrow wrapping | Resize the demo across `بِ بِ بِ — שָׁלוֹם שָׁלוֹם — q\u{1AB0}\u{301}` and inspect clusters. | Break only between grapheme clusters; each row retains its base and mark. | Display case and fixed-width snapshot exist; the Arabic/U+1AB0 identity failures prevent a pass. | **Failed for identity; wrapping partial**, E2/E6 |
+| V11 | Spaced RTL selection | Raise the spacing slider, drag across the `אבג` TextEdit, and inspect the highlight. | One continuous visual span including spacing. | Interactive case is present; no durable pointer-drag capture was recorded. | **Untested interaction**, E6 |
+| <a id="v12-wrapping-alignment-and-truncation"></a>V12 | RTL wrapping, physical alignment, justification, truncation | Use the demo's left/center/right controls, narrow marked line, styled bidi spans, and one-row ellipsis. | No cluster split or dropped run; physical alignment is exact and documented. | Native/browser and snapshot cover physical alignment, styling and truncation; cluster loss is reproduced; justification was not claimed. | **Partial**, E6 |
 | V13 | Explicit LTR/RTL paragraph override | Search public layout API and try to force direction independent of content. | Stable public override. | No API exists. | **Unsupported**, E4 |
 | V14 | Visual arrow navigation and ambiguous boundary | Move left/right through mixed Hebrew, Latin, and digits in `TextEdit`. | Movement follows visual order and preserves affinity. | No affinity model; interaction not run. | **Unsupported**, E4 |
 | V15 | Inherited widget mirroring | Set application/container direction and inspect controls, icons, popups, and tables. | Descendants inherit direction and directional affordances mirror. | No inherited policy exists. | **Unsupported**, E4 |
 | V16 | AccessKit RTL run | Build accessibility nodes for RTL and inspect direction/positions. | RTL direction and correct visual geometry. | Source always sets LTR. | **Unsupported**, E4 |
 | <a id="v17-ime-and-platform-input"></a>V17 | RTL IME composition | On each platform, compose marked RTL text under narrow wrapping; inspect candidate location, selection, commit, and cancel. | Composition range and candidate geometry follow the visual caret without text corruption. | No platform run. | **Untested** |
-| <a id="v18-native-platforms-and-renderers"></a>V18 | Native app and renderers | Run the future demo on Linux, Windows, macOS, Android, and iOS with each supported renderer; capture matching-baseline screenshots. | Shaping, order, caret, selection, and decoration pixels match the checklist. | No application or renderer run. | **Untested** |
-| <a id="v19-wasm-and-browser"></a>V19 | wasm/browser | Build the future web demo and execute V01-V17 in supported browsers. | Same text, caret, selection, IME, and font bytes as native. | The demo app and embedded fixture loader compile for wasm; no browser run. | **Untested**, E5 |
+| <a id="v18-native-platforms-and-renderers"></a>V18 | Native app and renderers | Run the demo on Linux, Windows, macOS, Android, and iOS with each supported renderer; capture matching-baseline screenshots. | Shaping, order, caret, selection, and decoration pixels match the checklist. | Linux wgpu/Vulkan was captured; other native platforms/renderers remain untested. | **Partial**, E6 |
+| <a id="v19-wasm-and-browser"></a>V19 | wasm/browser | Build the web demo and execute the checklist in supported browsers. | Same text, caret, selection, IME, and font bytes as native. | Exact wgpu build passed; Chrome glow/SwiftShader rendered and Ctrl+A matched native logical and failing visual behavior. Browser WebGPU and other browsers remain untested. | **Partial**, E5/E6 |
 | <a id="v20-uax-9-conformance"></a>V20 | UAX #9 conformance | Run pinned Unicode BidiTest.txt and BidiCharacterTest.txt through the layout resolver. | All declared-supported classes and paragraph levels pass; exclusions are enumerated. | No conformance runner or result. | **Untested** |
 | <a id="v21-performance-and-wasm-size"></a>V21 | Performance and wasm size | Benchmark representative LTR, pure RTL, and mixed paragraphs against `7ba3dbc4`; compare stripped wasm artifacts with identical features. | Regression budgets and exact byte delta are recorded. | No benchmark or artifact measurement. | **Untested** |
 | V22 | Rust documentation examples | Run `cargo test -p epaint -p egui --doc` at the exact commit. | All executable rustdoc examples compile and pass; pass count recorded. | 178 passed, 0 failed, 2 ignored (egui 172/0/1; epaint 6/0/1). | **Passed** |

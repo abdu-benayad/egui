@@ -24,6 +24,7 @@ pub mod painting;
 pub mod panels;
 pub mod password;
 mod popups;
+pub mod rtl;
 pub mod scene;
 pub mod screenshot;
 pub mod scrolling;

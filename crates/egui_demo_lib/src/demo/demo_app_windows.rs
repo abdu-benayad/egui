@@ -95,6 +95,7 @@ impl Default for DemoGroups {
                 Box::<super::painting::Painting>::default(),
                 Box::<super::panels::Panels>::default(),
                 Box::<super::popups::PopupsDemo>::default(),
+                Box::<super::rtl::RtlDemo>::default(),
                 Box::<super::scene::SceneDemo>::default(),
                 Box::<super::screenshot::Screenshot>::default(),
                 Box::<super::scrolling::Scrolling>::default(),
@@ -415,7 +416,9 @@ mod tests {
 
         for mut demo in demos.demos {
             // Widget Gallery needs to be customized (to set a specific date) and has its own test
-            if demo.name() == crate::WidgetGallery::default().name() {
+            if demo.name() == crate::WidgetGallery::default().name()
+                || demo.name() == crate::demo::rtl::RtlDemo::default().name()
+            {
                 continue;
             }
 

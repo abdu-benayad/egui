@@ -77,7 +77,21 @@ RTL accessibility geometry and navigation are unsupported at this baseline.
 
 Generic IME composition support exists, but RTL marked text, candidate-window
 placement, deletion, and commit behavior have not been validated. No native
-renderer, browser, or wasm interaction run is included in this baseline.
+IME run is included in this baseline.
+
+## Interactive demo
+
+Open **RTL text** in `egui_demo_app` to inspect the pinned Arabic, Hebrew,
+Persian/Urdu, and Latin fixtures; mixed numbers and punctuation; styled and
+wrapped text; physical alignment; truncation; TextEdit selection; spaced RTL
+text; and physical `Layout::right_to_left` widget placement. The page labels
+unsupported direction, affinity, mirroring, accessibility, and IME behavior
+instead of simulating APIs that do not exist.
+
+The [validation report](rtl-validation.md#e6-interactive-demo) records native
+wgpu and Chrome glow screenshots plus the exact interaction results. Those
+runs reproduce incomplete mixed-bidi selection painting and dropped combining
+mark identity, so the demo is evidence of both working and failing behavior.
 
 ## Migration notes
 

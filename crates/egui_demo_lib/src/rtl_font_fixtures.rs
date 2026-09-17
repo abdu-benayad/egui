@@ -7,6 +7,7 @@ use egui::{FontData, FontDefinitions, FontFamily};
 pub const ARABIC_FONT_NAME: &str = "Noto Sans Arabic RTL fixture";
 pub const HEBREW_FONT_NAME: &str = "Noto Sans Hebrew RTL fixture";
 pub const LATIN_FONT_NAME: &str = "Noto Sans RTL fixture";
+pub const RTL_FONT_FAMILY_NAME: &str = "RTL demo font fallback";
 
 pub const ARABIC_FONT_BYTES: &[u8] = include_bytes!("../data/rtl-fonts/NotoSansArabic-Regular.ttf");
 pub const HEBREW_FONT_BYTES: &[u8] = include_bytes!("../data/rtl-fonts/NotoSansHebrew-Regular.ttf");
@@ -164,10 +165,11 @@ fn validate_fixture_bytes(
 
 /// Build the deterministic font definitions used by the RTL demo on native and wasm.
 ///
-/// Fallback order is Noto Sans Arabic, Noto Sans Hebrew, Noto Sans, then egui's
-/// existing proportional fonts/providers. Validation fails loudly before
-/// definitions are returned if an embedded file is invalid or lacks a
-/// positive-sample glyph.
+/// The named [`RTL_FONT_FAMILY_NAME`] fallback order is Noto Sans Arabic, Noto
+/// Sans Hebrew, then Noto Sans. Egui's existing proportional family is left
+/// unchanged, so installing the fixtures does not alter unrelated demo text.
+/// Validation fails loudly before definitions are returned if an embedded file
+/// is invalid or lacks a positive-sample glyph.
 pub fn font_definitions() -> Result<FontDefinitions, RtlFontFixtureError> {
     validate_fixture_bytes(ARABIC_FONT_BYTES, HEBREW_FONT_BYTES, LATIN_FONT_BYTES)?;
 
@@ -185,15 +187,14 @@ pub fn font_definitions() -> Result<FontDefinitions, RtlFontFixtureError> {
         Arc::new(FontData::from_static(LATIN_FONT_BYTES)),
     );
 
-    let proportional = definitions
-        .families
-        .entry(FontFamily::Proportional)
-        .or_default();
-    // Insert in reverse order so this also works when egui is built without
-    // its `default_fonts` feature and the family starts empty.
-    proportional.insert(0, LATIN_FONT_NAME.to_owned());
-    proportional.insert(0, HEBREW_FONT_NAME.to_owned());
-    proportional.insert(0, ARABIC_FONT_NAME.to_owned());
+    definitions.families.insert(
+        FontFamily::Name(RTL_FONT_FAMILY_NAME.into()),
+        vec![
+            ARABIC_FONT_NAME.to_owned(),
+            HEBREW_FONT_NAME.to_owned(),
+            LATIN_FONT_NAME.to_owned(),
+        ],
+    );
 
     definitions.families.insert(
         FontFamily::Name(ARABIC_FONT_NAME.into()),
@@ -255,9 +256,9 @@ mod tests {
         );
 
         let definitions = font_definitions().unwrap();
-        let proportional = &definitions.families[&FontFamily::Proportional];
+        let rtl_fallback = &definitions.families[&FontFamily::Name(RTL_FONT_FAMILY_NAME.into())];
         assert_eq!(
-            &proportional[..3],
+            rtl_fallback.as_slice(),
             [
                 ARABIC_FONT_NAME.to_owned(),
                 HEBREW_FONT_NAME.to_owned(),
