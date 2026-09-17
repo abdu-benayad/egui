@@ -15,7 +15,7 @@ explicitly says otherwise.
 The documentation/demo delivery is stacked separately in open
 [PR #1](https://github.com/abdu-benayad/egui/pull/1). Its retained probes and
 additive fixture installer are pinned at
-[`e10ba24d`](https://github.com/abdu-benayad/egui/commit/e10ba24df38c716cd8a40dbefc365d95bb58c18d).
+[`7682d862`](https://github.com/abdu-benayad/egui/commit/7682d862c7e1e126265b348c9d114be3c14dcfc3).
 Neither PR is landed. Four later local RTL fixes through `7d8d0870` are outside
 this reviewed baseline, so the matrix deliberately retains the foundation's
 known failures.

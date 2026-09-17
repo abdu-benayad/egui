@@ -8,8 +8,8 @@ successful compilation is not interaction or rendering evidence.
 ## Revisions and delivery status
 
 - Foundation behavior under review: `c93e8863e958507056415e2a6dace56e23ba5f3a`
-- Executable probes and additive fixture installer: `e10ba24df38c716cd8a40dbefc365d95bb58c18d`
-- Interactive demo and captured screenshots: `5c35307c` (the additive installer
+- Executable probes and additive fixture installer: `7682d862c7e1e126265b348c9d114be3c14dcfc3`
+- Interactive demo and captured screenshots: `5c35307d` (the additive installer
   change does not alter the fixture bytes or named demo family)
 - Delivery stack: [PR #1](https://github.com/abdu-benayad/egui/pull/1), open and
   targeting `bidi-runs`; it is not merged upstream
@@ -19,7 +19,7 @@ successful compilation is not interaction or rendering evidence.
   defects recorded here are expected baseline behavior, not regressions in those fixes.
 
 The documentation describes foundation behavior at `c93e8863`. Commands for
-the retained probes and fixture installer must be run at `e10ba24d` or a
+the retained probes and fixture installer must be run at `7682d862` or a
 descendant containing it. The final documentation-only revision may therefore
 be newer than the code revision that produced the evidence.
 
@@ -191,7 +191,7 @@ pixel-rendering claim is derived from compilation.
 ## E6: interactive native and browser demo
 
 Metadata: source baseline and fixture versions are recorded above; the demo
-changes at `5c35307c` were run on 2026-09-17. Native was Linux x86_64 with wgpu/Vulkan on an
+changes at `5c35307d` were run on 2026-09-17. Native was Linux x86_64 with wgpu/Vulkan on an
 NVIDIA GeForce GTX 1050 Ti, NVIDIA driver 535.309.01. Browser was headless
 Google Chrome 150.0.7871.128 on Linux using glow/WebGL 2 through ANGLE
 SwiftShader. The wasm SHA-256 for that browser run was

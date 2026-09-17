@@ -5,7 +5,7 @@ This guide describes the development implementation at commit
 [PR #8577](https://github.com/emilk/egui/pull/8577), not in an egui release.
 The docs, demo, fixtures, and retained evidence probes are delivered in open
 [stacked PR #1](https://github.com/abdu-benayad/egui/pull/1); the executable
-evidence revision is `e10ba24df38c716cd8a40dbefc365d95bb58c18d`.
+evidence revision is `7682d862c7e1e126265b348c9d114be3c14dcfc3`.
 See the [versioned support matrix](rtl-support.md) for status by subsystem and
 the [validation checklist](rtl-validation.md) for exact evidence and failures.
 
