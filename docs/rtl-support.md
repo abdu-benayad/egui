@@ -12,6 +12,14 @@ they are not merged into `emilk/egui:main` and are not part of a released egui
 version. All statuses below therefore describe this exact branch unless a row
 explicitly says otherwise.
 
+The documentation/demo delivery is stacked separately in open
+[PR #1](https://github.com/abdu-benayad/egui/pull/1). Its retained probes and
+additive fixture installer are pinned at
+[`e10ba24d`](https://github.com/abdu-benayad/egui/commit/e10ba24df38c716cd8a40dbefc365d95bb58c18d).
+Neither PR is landed. Four later local RTL fixes through `7d8d0870` are outside
+this reviewed baseline, so the matrix deliberately retains the foundation's
+known failures.
+
 ## Status meanings
 
 - **Supported**: the stated behavior passed a focused check on this commit.

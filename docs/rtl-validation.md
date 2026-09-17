@@ -5,11 +5,28 @@ is **passed** only when its stated expected result was observed on the recorded
 commit and environment. Missing runtime access is recorded as **untested**;
 successful compilation is not interaction or rendering evidence.
 
+## Revisions and delivery status
+
+- Foundation behavior under review: `c93e8863e958507056415e2a6dace56e23ba5f3a`
+- Executable probes and additive fixture installer: `e10ba24df38c716cd8a40dbefc365d95bb58c18d`
+- Interactive demo and captured screenshots: `5c35307c` (the additive installer
+  change does not alter the fixture bytes or named demo family)
+- Delivery stack: [PR #1](https://github.com/abdu-benayad/egui/pull/1), open and
+  targeting `bidi-runs`; it is not merged upstream
+- Foundation PR: draft [PR #8577](https://github.com/emilk/egui/pull/8577),
+  also not merged upstream
+- Four later local RTL fixes through `7d8d0870` are outside this baseline. The
+  defects recorded here are expected baseline behavior, not regressions in those fixes.
+
+The documentation describes foundation behavior at `c93e8863`. Commands for
+the retained probes and fixture installer must be run at `e10ba24d` or a
+descendant containing it. The final documentation-only revision may therefore
+be newer than the code revision that produced the evidence.
+
 ## Environment
 
-- Commit: `c93e8863e958507056415e2a6dace56e23ba5f3a`
 - Date: 2026-09-17
-- Branch: `bidi-runs`, draft [PR #8577](https://github.com/emilk/egui/pull/8577)
+- Foundation branch: `bidi-runs`
 - Upstream base: `7ba3dbc4b07e72dcc85697e8cb51dcc70b1c8a6f` (two commits behind the tested head)
 - Source crate version: egui/epaint 0.36.2; no release contains the tested commits
 - OS: Linux Lite 7.6 / Ubuntu 24.04.4 LTS, Linux 6.8.0-134-generic, x86_64
@@ -85,9 +102,10 @@ The relevant implementation is
 ## E3: negative geometry and selection probes
 
 Metadata: the full environment above; browser and renderer are not applicable;
-Ubuntu Light and default features were used. Each probe copied the corresponding
-regression assertion from the four known follow-up commits onto `c93e8863`, ran
-it in isolation, recorded the failure, and removed the temporary test.
+Ubuntu Light and default features were used. The probes are checked in at
+`e10ba24d`. They calculate the correct visual geometry, assert that the
+foundation still differs, and print both values. This makes the known defects
+reproducible while causing a future fix to require an evidence update.
 
 Commands:
 
@@ -103,12 +121,14 @@ Expected:
 - a pure RTL row's `rect_without_leading_space()` starts at the leftmost glyph;
 - selecting logical range 4..7 in `abc אבג def` paints the Hebrew word's visual span.
 
-Observed: all three probes failed as expected on this baseline. The mixed-row
+Observed: all three commands ran one test and passed by reproducing the known
+baseline mismatch. The mixed-row
 end cursor was x=`32.96875` instead of x=`15.896`; the trimmed pure-RTL bounds
 were `[[7, 0] - [14, 16]]` instead of `[[0, 0] - [14, 16]]`; the Hebrew-word
-selection was `[46, 46]` instead of `[25, 46]`. The current one-rectangle
-selection path is visible in
-[`visuals.rs`](https://github.com/abdu-benayad/egui/blob/c93e8863e958507056415e2a6dace56e23ba5f3a/crates/egui/src/text_selection/visuals.rs#L43-L69).
+selection was `[46, 46]` instead of `[25, 46]`. The retained probes are in
+[`text_layout.rs`](https://github.com/abdu-benayad/egui/blob/e10ba24df38c716cd8a40dbefc365d95bb58c18d/crates/epaint/src/text/text_layout.rs)
+and
+[`visuals.rs`](https://github.com/abdu-benayad/egui/blob/e10ba24df38c716cd8a40dbefc365d95bb58c18d/crates/egui/src/text_selection/visuals.rs).
 
 <a id="e4-source-audit"></a>
 ## E4: source audit
@@ -155,10 +175,12 @@ cargo check -p egui_demo_app --lib --target wasm32-unknown-unknown \
 Expected: integrity and license hashes match; the named fonts cover the
 Arabic, Persian, Urdu, Hebrew, Latin, digit, punctuation, and combining-mark
 corpus; `漢` is absent from the fixture fallback chain; missing and corrupt
-bytes return explicit errors; the crate package contains every font, license,
-manifest, and loader; the same `include_bytes!` loader compiles for wasm.
+bytes return explicit errors; additive installation preserves a host's custom
+fonts and families and is idempotent; the crate package contains every font,
+license, manifest, and loader; the same `include_bytes!` loader compiles for wasm.
 
-Observed: all 3 `rtl_font_fixtures` tests passed. The first coverage probe
+Observed: all 4 `rtl_font_fixtures` tests passed, including the preconfigured
+host-family preservation test. The first coverage probe
 correctly failed because the Arabic-specific font lacks Latin letters; adding
 the separately pinned Noto Sans 2.015 fixture removed that false assumption.
 The package listing contained all three TTFs, all three license files, the
@@ -169,7 +191,7 @@ pixel-rendering claim is derived from compilation.
 ## E6: interactive native and browser demo
 
 Metadata: source baseline and fixture versions are recorded above; the demo
-changes were run on 2026-09-17. Native was Linux x86_64 with wgpu/Vulkan on an
+changes at `5c35307c` were run on 2026-09-17. Native was Linux x86_64 with wgpu/Vulkan on an
 NVIDIA GeForce GTX 1050 Ti, NVIDIA driver 535.309.01. Browser was headless
 Google Chrome 150.0.7871.128 on Linux using glow/WebGL 2 through ANGLE
 SwiftShader. The wasm SHA-256 for that browser run was
@@ -217,6 +239,10 @@ Artifacts:
 - browser display: [`rtl-demo-web-glow.png`](rtl-demo-web-glow.png), SHA-256 `1ac8882797bc85c19dcc01851c879408551ddf4c4b319041ee3e26694b55fde2`;
 - browser Ctrl+A: [`rtl-demo-web-glow-select-all.png`](rtl-demo-web-glow-select-all.png), SHA-256 `687be662c608c0229ca72f68cab14fe6014bd0fe9b7a86bd984381f479bdc94f`;
 - provider-free snapshot: `crates/egui_demo_lib/tests/snapshots/rtl_demo/static.png`.
+
+No runtime or wasm-size head-to-head measurement was performed. Browser WebGPU
+rendering also remains unvalidated; this section records a successful wgpu
+build and a separate Chrome glow/SwiftShader rendering session.
 
 ## Per-case checklist
 
