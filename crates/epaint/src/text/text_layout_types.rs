@@ -808,7 +808,14 @@ impl PlacedRow {
 
     /// Same as [`Self::rect`] but excluding the `LayoutSection::leading_space`.
     pub fn rect_without_leading_space(&self) -> Rect {
-        let x = self.pos.x + self.glyphs.first().map_or(0.0, |g| g.pos.x);
+        // The leftmost glyph, which in a right-to-left row is not the first one:
+        let leftmost = self
+            .glyphs
+            .iter()
+            .map(|g| g.pos.x)
+            .min_by(f32::total_cmp)
+            .unwrap_or(0.0);
+        let x = self.pos.x + leftmost;
         let right = self.pos.x + self.size.x;
         Rect::from_min_max(
             Pos2::new(x, self.pos.y),
@@ -982,27 +989,37 @@ impl Row {
     /// and then decides which side of it the cursor belongs on: for a
     /// left-to-right glyph the cursor _before_ it is on its left, for a
     /// right-to-left glyph it is on its right.
+    ///
+    /// At the seam between a left-to-right and a right-to-left run two glyphs
+    /// are equally near; of the columns they suggest, the one whose own caret
+    /// ([`Self::x_offset`]) lands closest to `desired_x` wins, so that a caret
+    /// position round-trips.
     pub fn char_at(&self, desired_x: f32) -> CharIndex {
-        let mut nearest: Option<(f32, usize)> = None;
-        for (i, glyph) in self.glyphs.iter().enumerate() {
+        let distance = |glyph: &Glyph| {
             let rect = glyph.logical_rect();
-            let distance = (rect.min.x - desired_x)
+            (rect.min.x - desired_x)
                 .max(desired_x - rect.max.x)
-                .max(0.0);
-            if nearest.is_none_or(|(best, _)| distance < best) {
-                nearest = Some((distance, i));
-            }
-        }
-        let Some((_, i)) = nearest else {
+                .max(0.0)
+        };
+        let Some(nearest) = self.glyphs.iter().map(distance).min_by(f32::total_cmp) else {
             return CharIndex(0);
         };
-        let glyph = &self.glyphs[i];
-        let past_center = glyph.logical_rect().center().x <= desired_x;
-        if past_center == glyph.is_rtl() {
-            CharIndex(i)
-        } else {
-            CharIndex(i + 1)
-        }
+        let column_beside = |(i, glyph): (usize, &Glyph)| {
+            let past_center = glyph.logical_rect().center().x <= desired_x;
+            if past_center == glyph.is_rtl() {
+                CharIndex(i)
+            } else {
+                CharIndex(i + 1)
+            }
+        };
+        let caret_error = |column: &CharIndex| (self.x_offset(*column) - desired_x).abs();
+        self.glyphs
+            .iter()
+            .enumerate()
+            .filter(|(_, glyph)| distance(glyph) == nearest)
+            .map(column_beside)
+            .min_by(|a, b| caret_error(a).total_cmp(&caret_error(b)))
+            .unwrap_or(CharIndex(0))
     }
 
     /// The x coordinate of a cursor placed before the char at `column`
@@ -1013,8 +1030,11 @@ impl Row {
         match self.glyphs.get(column.0) {
             Some(glyph) if glyph.is_rtl() => glyph.max_x(),
             Some(glyph) => glyph.pos.x,
+            // Past the end: the trailing edge of the last logical glyph, which in a
+            // bidi row need not be the row's right edge.
             None => match self.glyphs.last() {
                 Some(last) if last.is_rtl() => last.pos.x,
+                Some(last) if self.glyphs.iter().any(Glyph::is_rtl) => last.max_x(),
                 _ => self.size.x,
             },
         }

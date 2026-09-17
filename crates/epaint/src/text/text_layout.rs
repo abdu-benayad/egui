@@ -393,6 +393,12 @@ fn emit_cluster_bitmap(
 ///
 /// Fewer than the cluster's glyphs when the shaper could not map a character:
 /// its combining marks and repeated `.notdef` glyphs are dropped.
+///
+/// The glyphs are emitted in logical order, base before marks. The shaper
+/// returns a right-to-left cluster reversed (a mark _before_ its base), and
+/// [`reorder_row_visually`] relies on a zero-width glyph following the glyph
+/// it belongs to. Positions still come from the shaper's pen, which walks the
+/// cluster in the shaper's order.
 fn emit_cluster_glyphs(
     fonts: &mut FontsImpl,
     shaped: &ShapedRun<'_>,
@@ -410,8 +416,31 @@ fn emit_cluster_glyphs(
     let px_scale = face_metrics.px_scale_factor;
     let mut emitted = 0;
 
-    for idx in glyph_range.clone() {
-        let first_in_cluster = idx == glyph_range.start;
+    let reversed = run.bidi_level % 2 == 1 && 1 < glyph_range.len();
+    let cluster_origin_px = paragraph.cursor_x_px;
+    let mut cluster_end_px = cluster_origin_px;
+    // Where the shaper's pen stands at each glyph, relative to the cluster origin:
+    let pen_px: Vec<f32> = if reversed {
+        positions[glyph_range.clone()]
+            .iter()
+            .scan(0.0, |pen, pos| {
+                let at = *pen;
+                *pen += pos.x_advance as f32 * px_scale;
+                Some(at)
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+
+    for k in 0..glyph_range.len() {
+        let idx = if reversed {
+            paragraph.cursor_x_px = cluster_origin_px + pen_px[glyph_range.len() - 1 - k];
+            glyph_range.end - 1 - k
+        } else {
+            glyph_range.start + k
+        };
+        let first_in_cluster = k == 0;
         let (info, pos) = (&infos[idx], &positions[idx]);
         let glyph_id = skrifa::GlyphId::new(info.glyph_id);
         let cluster = info.cluster;
@@ -517,8 +546,10 @@ fn emit_cluster_glyphs(
         };
         paragraph.glyphs.push(glyph);
         emitted += 1;
+        cluster_end_px = cluster_end_px.max(paragraph.cursor_x_px);
     }
 
+    paragraph.cursor_x_px = cluster_end_px;
     emitted
 }
 
@@ -1962,6 +1993,84 @@ mod tests {
             let back = composed.cursor_from_pos(rect.center().to_vec2());
             assert_eq!(back.index.0, i, "cursor round-trip at {i}");
         }
+    }
+
+    #[test]
+    fn end_caret_of_a_bidi_row_follows_the_last_logical_glyph() {
+        let mut fonts = test_fonts();
+        let galley = layout_simple(&mut fonts, "אב 12");
+        let row = &galley.rows[0].row;
+        let two = &row.glyphs[4];
+        assert!(!two.is_rtl());
+        assert!(
+            two.max_x() < row.glyphs[0].pos.x,
+            "the digits sit left of the Hebrew in a right-to-left paragraph"
+        );
+        assert_eq!(row.x_offset(CharIndex(5)), two.max_x());
+        assert_eq!(row.char_at(two.max_x()), CharIndex(5));
+
+        for i in 0..=5 {
+            let cursor = CCursor {
+                index: CharIndex(i),
+                prefer_next_row: false,
+            };
+            let rect = galley.pos_from_cursor(cursor);
+            let back = galley.cursor_from_pos(rect.center().to_vec2());
+            assert_eq!(back.index.0, i, "cursor round-trip at {i}");
+        }
+    }
+
+    #[test]
+    fn rect_without_leading_space_starts_at_the_leftmost_glyph() {
+        let mut fonts = test_fonts();
+        let galley = layout_simple(&mut fonts, "אב");
+        let row = &galley.rows[0];
+        let leftmost = row
+            .glyphs
+            .iter()
+            .map(|g| g.pos.x)
+            .fold(f32::INFINITY, f32::min);
+        assert_eq!(leftmost, 0.0);
+        assert_eq!(row.rect_without_leading_space(), row.rect());
+    }
+
+    /// A combining mark is a zero-width glyph after its base; it must move with the base.
+    #[test]
+    fn marks_travel_with_their_base_when_a_row_is_reordered() {
+        fn glyph(chr: char, x: f32, advance_width: f32) -> Glyph {
+            Glyph {
+                chr,
+                pos: pos2(x, 0.0),
+                advance_width,
+                line_height: 10.0,
+                font_ascent: 8.0,
+                font_height: 10.0,
+                font_face_ascent: 8.0,
+                font_face_height: 10.0,
+                uv_rect: Default::default(),
+                is_color: false,
+                bidi_level: 1,
+                section_index: 0,
+                first_vertex: 0,
+            }
+        }
+        let mut row = Row {
+            section_index_at_start: 0,
+            glyphs: vec![
+                glyph('ב', 0.0, 10.0),
+                glyph('\u{5b8}', -2.0, 0.0), // qamats, drawn 2 left of the bet's origin
+                glyph('א', 10.0, 10.0),
+            ],
+            size: vec2(20.0, 10.0),
+            visuals: Default::default(),
+        };
+        reorder_row_visually(PointScale::new(1.0), &mut row);
+        let xs: Vec<f32> = row.glyphs.iter().map(|g| g.pos.x).collect();
+        assert_eq!(
+            xs,
+            [10.0, 8.0, 0.0],
+            "alef left, bet right, the mark 2 left of the bet"
+        );
     }
 
     #[test]
