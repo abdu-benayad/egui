@@ -11,7 +11,13 @@ readme = "README.md"
 repository = "https://github.com/emilk/egui/tree/main/crates/egui_demo_lib"
 categories = ["gui", "graphics"]
 keywords = ["glow", "egui", "gui", "gamedev"]
-include = ["../../LICENSE-APACHE", "../../LICENSE-MIT", "**/*.rs", "Cargo.toml", "data/*"]
+include = [
+  "../../LICENSE-APACHE",
+  "../../LICENSE-MIT",
+  "**/*.rs",
+  "Cargo.toml",
+  "data/**/*",
+]
 
 [lints]
 workspace = true
@@ -41,6 +47,7 @@ syntect = ["egui_extras/syntect"]
 [dependencies]
 egui = { workspace = true, default-features = false, features = ["color-hex"] }
 egui_extras = { workspace = true, features = ["image", "svg"] }
+epaint_default_fonts.workspace = true
 
 log.workspace = true
 unicode_names2.workspace = true # this old version has fewer dependencies
@@ -61,6 +68,7 @@ egui_kittest = { workspace = true, features = ["wgpu", "snapshot"] }
 image = { workspace = true, features = ["png"] }
 mimalloc.workspace = true # for benchmarks
 rand.workspace = true
+ttf-parser = "0.25.1"
 
 [[bench]]
 name = "benchmark"

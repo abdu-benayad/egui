@@ -1389,12 +1389,14 @@ dependencies = [
  "egui",
  "egui_extras",
  "egui_kittest",
+ "epaint_default_fonts",
  "image",
  "jiff",
  "log",
  "mimalloc",
  "rand 0.10.2",
  "serde",
+ "ttf-parser",
  "unicode_names2",
 ]
 

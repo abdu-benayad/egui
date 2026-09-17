@@ -13,6 +13,7 @@
 mod demo;
 pub mod easy_mark;
 mod rendering_test;
+mod rtl_font_fixtures;
 
 pub use demo::{Demo, DemoWindows, View, WidgetGallery};
 pub use rendering_test::ColorTest;
