@@ -283,6 +283,7 @@ fn layout_shaped_run(
         }
         ctx.is_first_glyph_in_section = false;
 
+        let first_glyph = paragraph.glyphs.len();
         let as_one_bitmap = if char_count < glyph_range.len() {
             emit_cluster_bitmap(fonts, &shaped, glyph_range.clone(), ctx, paragraph)
         } else {
@@ -291,7 +292,29 @@ fn layout_shaped_run(
         let emitted = as_one_bitmap
             .unwrap_or_else(|| emit_cluster_glyphs(fonts, &shaped, glyph_range, ctx, paragraph));
 
-        emit_continuation_glyphs(ctx, paragraph, run_text, byte_range, emitted, face_metrics);
+        emit_continuation_glyphs(
+            ctx,
+            paragraph,
+            run_text,
+            byte_range.clone(),
+            emitted,
+            face_metrics,
+        );
+
+        // The k-th glyph of the finished cluster carries its k-th character, whichever
+        // branch emitted it and whatever the shaper or the font dropped along the way.
+        // Every reader of a row's text, the accessibility value included, sees a mark
+        // as the mark and not as its base. When a natively right-to-left script stacks
+        // several marks on one base the shaper hands them over reversed, so their
+        // characters may be permuted among themselves; the base and the set of marks
+        // are right either way.
+        let cluster_text = run_text.get(byte_range).unwrap_or_default();
+        for (glyph, chr) in paragraph.glyphs[first_glyph..]
+            .iter_mut()
+            .zip(cluster_text.chars())
+        {
+            glyph.chr = chr;
+        }
     }
 }
 
@@ -393,6 +416,25 @@ fn emit_cluster_bitmap(
 ///
 /// Fewer than the cluster's glyphs when the shaper could not map a character:
 /// its combining marks and repeated `.notdef` glyphs are dropped.
+///
+/// The glyphs are emitted in logical order, base before marks, because
+/// [`reorder_row_visually`] relies on a zero-width glyph following the glyph
+/// it belongs to. The shaper returns a right-to-left cluster in visual order:
+/// for a natively right-to-left script that is reversed logical order (a mark
+/// _before_ its base), for a Latin run under a direction override it is
+/// reversed graphemes with each grapheme still base-first. Either way the
+/// advancing glyphs in reversed shaper order followed by the marks is logical
+/// order. Positions still come from the shaper's pen, which walks the cluster
+/// in the shaper's order.
+///
+/// Every glyph is emitted under the cluster's first character; the caller
+/// assigns each glyph its own character once the cluster is complete.
+///
+/// A mark is drawn where the shaper put it, but laid out at the end of its
+/// cluster like a continuation glyph: [`Glyph::pos`] is the cluster's trailing
+/// edge and the drawing offset goes into [`Glyph::uv_rect`], the way a shaper
+/// y-offset already does. Row widths and carets then see the base's advance
+/// rather than the mark's position over it.
 fn emit_cluster_glyphs(
     fonts: &mut FontsImpl,
     shaped: &ShapedRun<'_>,
@@ -410,8 +452,42 @@ fn emit_cluster_glyphs(
     let px_scale = face_metrics.px_scale_factor;
     let mut emitted = 0;
 
-    for idx in glyph_range.clone() {
-        let first_in_cluster = idx == glyph_range.start;
+    let cluster_origin_px = paragraph.cursor_x_px;
+    let mut cluster_end_px = cluster_origin_px;
+
+    // For a right-to-left cluster of several glyphs: which glyph to emit in
+    // which order, and where the shaper's pen stood at it (relative to the cluster origin).
+    let mut emission: Vec<(usize, f32)> = Vec::new();
+    if run.bidi_level % 2 == 1 && 1 < glyph_range.len() {
+        let mut pen = 0.0;
+        let pen_px: Vec<f32> = positions[glyph_range.clone()]
+            .iter()
+            .map(|pos| {
+                let at = pen;
+                pen += pos.x_advance as f32 * px_scale;
+                at
+            })
+            .collect();
+        let advancing = |idx: &usize| 0 < positions[*idx].x_advance;
+        let at_pen = |idx: usize| (idx, pen_px[idx - glyph_range.start]);
+        emission.extend(glyph_range.clone().rev().filter(advancing).map(at_pen));
+        emission.extend(
+            glyph_range
+                .clone()
+                .filter(|idx| !advancing(idx))
+                .map(at_pen),
+        );
+    }
+
+    for k in 0..glyph_range.len() {
+        let idx = match emission.get(k) {
+            Some(&(idx, pen)) => {
+                paragraph.cursor_x_px = cluster_origin_px + pen;
+                idx
+            }
+            None => glyph_range.start + k,
+        };
+        let first_in_cluster = k == 0;
         let (info, pos) = (&infos[idx], &positions[idx]);
         let glyph_id = skrifa::GlyphId::new(info.glyph_id);
         let cluster = info.cluster;
@@ -517,8 +593,23 @@ fn emit_cluster_glyphs(
         };
         paragraph.glyphs.push(glyph);
         emitted += 1;
+        cluster_end_px = cluster_end_px.max(paragraph.cursor_x_px);
     }
 
+    paragraph.cursor_x_px = cluster_end_px;
+
+    if 1 < emitted {
+        let first_glyph = paragraph.glyphs.len() - emitted;
+        let mut base_end_x = None;
+        for glyph in &mut paragraph.glyphs[first_glyph..] {
+            if 0.0 < glyph.advance_width {
+                base_end_x = Some(glyph.max_x());
+            } else if let Some(base_end_x) = base_end_x {
+                glyph.uv_rect.offset.x += glyph.pos.x - base_end_x;
+                glyph.pos.x = base_end_x;
+            }
+        }
+    }
     emitted
 }
 
@@ -1550,7 +1641,13 @@ struct RowBreakCandidates {
 }
 
 impl RowBreakCandidates {
+    /// Consider breaking the row after `glyphs[0]`, which sits at `index` in the paragraph.
     fn add(&mut self, index: usize, glyphs: &[Glyph]) {
+        // A zero-width glyph is a combining mark, or a character folded into the cluster
+        // bitmap before it: it belongs to the glyph in front of it, so no row may start with it.
+        if glyphs.get(1).is_some_and(|next| next.advance_width <= 0.0) {
+            return;
+        }
         let chr = glyphs[0].chr;
         const NON_BREAKING_SPACE: char = '\u{A0}';
         if chr.is_whitespace() && chr != NON_BREAKING_SPACE {
@@ -1844,8 +1941,12 @@ fn reorder_row_visually(point_scale: PointScale, row: &mut Row) {
 
     let mut pen = origins[0];
     for &b in &order {
+        // The block's advancing glyph snaps to the pixel grid; the zero-width
+        // glyphs after it keep their exact offset from it, so a mark laid out
+        // at its base's end stays there.
+        let block_x = point_scale.round_to_pixel(pen);
         for glyph in &mut glyphs[blocks[b].clone()] {
-            glyph.pos.x = point_scale.round_to_pixel(pen + (glyph.pos.x - origins[b]));
+            glyph.pos.x = block_x + (glyph.pos.x - origins[b]);
         }
         pen += widths[b];
     }
@@ -1962,6 +2063,167 @@ mod tests {
             let back = composed.cursor_from_pos(rect.center().to_vec2());
             assert_eq!(back.index.0, i, "cursor round-trip at {i}");
         }
+    }
+
+    /// A combining mark is a zero-width glyph after its base; it must move with the base.
+    #[test]
+    fn marks_travel_with_their_base_when_a_row_is_reordered() {
+        fn glyph(chr: char, x: f32, advance_width: f32) -> Glyph {
+            Glyph {
+                chr,
+                pos: pos2(x, 0.0),
+                advance_width,
+                line_height: 10.0,
+                font_ascent: 8.0,
+                font_height: 10.0,
+                font_face_ascent: 8.0,
+                font_face_height: 10.0,
+                uv_rect: Default::default(),
+                is_color: false,
+                bidi_level: 1,
+                section_index: 0,
+                first_vertex: 0,
+            }
+        }
+        let mut row = Row {
+            section_index_at_start: 0,
+            glyphs: vec![
+                glyph('ב', 0.0, 10.0),
+                glyph('\u{5b8}', -2.0, 0.0), // qamats, drawn 2 left of the bet's origin
+                glyph('א', 10.0, 10.0),
+            ],
+            size: vec2(20.0, 10.0),
+            visuals: Default::default(),
+        };
+        reorder_row_visually(PointScale::new(1.0), &mut row);
+        let xs: Vec<f32> = row.glyphs.iter().map(|g| g.pos.x).collect();
+        assert_eq!(
+            xs,
+            [10.0, 8.0, 0.0],
+            "alef left, bet right, the mark 2 left of the bet"
+        );
+    }
+
+    /// Hack draws `q́` as `q` plus a combining acute: two glyphs for two chars, the acute zero-width.
+    #[test]
+    #[cfg(feature = "default_fonts")]
+    fn a_combining_mark_is_laid_out_at_the_end_of_its_cluster() {
+        let mut fonts = FontsImpl::new(TextOptions::default(), hack_only());
+        let galley = layout_simple(&mut fonts, "q\u{301}q\u{301}");
+        let row = &galley.rows[0].row;
+        let [q1, mark1, q2, mark2] = [
+            &row.glyphs[0],
+            &row.glyphs[1],
+            &row.glyphs[2],
+            &row.glyphs[3],
+        ];
+
+        assert_eq!(mark1.advance_width, 0.0);
+        assert!(!mark1.uv_rect.is_nothing(), "the acute is drawn");
+        assert_eq!(mark1.pos.x, q1.max_x(), "but laid out where the q ends");
+        assert!(
+            mark1.pos.x + mark1.uv_rect.offset.x < q1.max_x(),
+            "and painted over the q, left of that"
+        );
+        assert_eq!(mark2.pos.x, q2.max_x());
+        let plain = layout_simple(&mut fonts, "qq");
+        assert_eq!(
+            row.size.x, plain.rows[0].row.size.x,
+            "the acutes add no width"
+        );
+
+        // Wrapped one letter per row, each row is still as wide as its letter:
+        let job = LayoutJob::simple(
+            "q\u{301}q\u{301}".to_owned(),
+            FontId::proportional(14.0),
+            Color32::WHITE,
+            q1.advance_width + 1.0,
+        );
+        let wrapped = layout(&mut fonts, 1.0, Arc::new(job));
+        assert_eq!(wrapped.rows.len(), 2);
+        for placed_row in &wrapped.rows {
+            let width = placed_row.row.size.x;
+            // The pen is rounded to `GUI_ROUNDING`; the acute adds nothing beyond that.
+            assert!((width - q1.advance_width).abs() < 0.05, "row width {width}");
+        }
+    }
+
+    /// The same under a right-to-left override, where the shaper hands the acute back before its q.
+    #[test]
+    #[cfg(feature = "default_fonts")]
+    fn a_row_too_narrow_for_a_letter_keeps_the_letter_and_its_mark_together() {
+        let mut fonts = FontsImpl::new(TextOptions::default(), hack_only());
+        let q = layout_simple(&mut fonts, "q").rows[0].glyphs[0];
+
+        // Narrower than one `q`: every row overflows, and the only breaks left are between clusters.
+        let job = LayoutJob::simple(
+            "q\u{301}q\u{301}".to_owned(),
+            FontId::proportional(14.0),
+            Color32::WHITE,
+            q.advance_width - 1.0,
+        );
+        let wrapped = layout(&mut fonts, 1.0, Arc::new(job));
+
+        assert_eq!(wrapped.rows.len(), 2);
+        for placed_row in &wrapped.rows {
+            let chars: Vec<char> = placed_row
+                .row
+                .glyphs
+                .iter()
+                .map(|glyph| glyph.chr)
+                .collect();
+            assert_eq!(chars, ['q', '\u{301}'], "a row is a whole cluster");
+            let mark = placed_row.row.glyphs[1];
+            assert_eq!(mark.pos.x, placed_row.row.glyphs[0].max_x());
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "default_fonts")]
+    fn a_mark_the_font_lacks_still_counts_as_its_own_character() {
+        let mut fonts = FontsImpl::new(TextOptions::default(), hack_only());
+        // Hack has the acute but not U+1AB0, which the shaper maps to `.notdef` and the
+        // emitter drops; the row still has one glyph per character, each with its own.
+        let galley = layout_simple(&mut fonts, "q\u{1AB0}\u{301}");
+        let row = &galley.rows[0].row;
+        assert_eq!(row.text(), "q\u{1AB0}\u{301}");
+        assert_eq!(row.glyphs.len(), 3);
+        assert!(
+            row.glyphs[1..]
+                .iter()
+                .all(|glyph| glyph.advance_width == 0.0)
+        );
+        let drawn = row
+            .glyphs
+            .iter()
+            .filter(|glyph| !glyph.uv_rect.is_nothing())
+            .count();
+        assert_eq!(drawn, 2, "the q and the acute");
+    }
+
+    #[test]
+    #[cfg(feature = "default_fonts")]
+    fn a_combining_mark_in_right_to_left_text_stays_with_its_base() {
+        let mut fonts = FontsImpl::new(TextOptions::default(), hack_only());
+        let galley = layout_simple(&mut fonts, "\u{202E}q\u{301}q\u{301}");
+        let row = &galley.rows[0].row;
+        let [q1, mark1, q2, mark2] = [
+            &row.glyphs[1],
+            &row.glyphs[2],
+            &row.glyphs[3],
+            &row.glyphs[4],
+        ];
+        assert!(q1.is_rtl() && q2.is_rtl());
+        assert!(
+            q2.pos.x < q1.pos.x,
+            "the second q is drawn left of the first"
+        );
+        assert_eq!(mark1.pos.x, q1.max_x());
+        assert_eq!(mark2.pos.x, q2.max_x());
+        assert!(
+            mark1.pos.x + mark1.uv_rect.offset.x < q1.max_x(),
+            "the first acute is painted over the first q"
+        );
     }
 
     #[test]
