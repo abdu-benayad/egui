@@ -288,8 +288,16 @@ fn layout_shaped_run(
         } else {
             None
         };
-        let emitted = as_one_bitmap
-            .unwrap_or_else(|| emit_cluster_glyphs(fonts, &shaped, glyph_range, ctx, paragraph));
+        let emitted = as_one_bitmap.unwrap_or_else(|| {
+            emit_cluster_glyphs(
+                fonts,
+                &shaped,
+                glyph_range,
+                byte_range.clone(),
+                ctx,
+                paragraph,
+            )
+        });
 
         emit_continuation_glyphs(ctx, paragraph, run_text, byte_range, emitted, face_metrics);
     }
@@ -404,6 +412,13 @@ fn emit_cluster_bitmap(
 /// order. Positions still come from the shaper's pen, which walks the cluster
 /// in the shaper's order.
 ///
+/// The k-th glyph emitted carries the k-th character of `cluster_bytes`, so a
+/// mark's [`Glyph::chr`] is the mark and not its base (which is what every
+/// reader of the row's text, the accessibility value included, sees). When a
+/// natively right-to-left script stacks several marks on one base the shaper
+/// hands them over reversed, so their characters may be permuted among
+/// themselves; the base and the set of marks are right either way.
+///
 /// A mark is drawn where the shaper put it, but laid out at the end of its
 /// cluster like a continuation glyph: [`Glyph::pos`] is the cluster's trailing
 /// edge and the drawing offset goes into [`Glyph::uv_rect`], the way a shaper
@@ -413,6 +428,7 @@ fn emit_cluster_glyphs(
     fonts: &mut FontsImpl,
     shaped: &ShapedRun<'_>,
     glyph_range: Range<usize>,
+    cluster_bytes: Range<usize>,
     ctx: &ShapingContext,
     paragraph: &mut Paragraph,
 ) -> usize {
@@ -425,6 +441,7 @@ fn emit_cluster_glyphs(
     } = *shaped;
     let px_scale = face_metrics.px_scale_factor;
     let mut emitted = 0;
+    let mut cluster_chars = run_text.get(cluster_bytes).unwrap_or_default().chars();
 
     let cluster_origin_px = paragraph.cursor_x_px;
     let mut cluster_end_px = cluster_origin_px;
@@ -469,7 +486,9 @@ fn emit_cluster_glyphs(
         let x_offset_px = pos.x_offset as f32 * px_scale;
         let y_offset_px = -(pos.y_offset as f32 * px_scale); // harfrust Y+ up → screen Y+ down
 
-        let chr = shaped.char_at(cluster);
+        let chr = cluster_chars
+            .next()
+            .unwrap_or_else(|| shaped.char_at(cluster));
 
         // Tab is a layout concept, not a glyph — the shaper doesn't know about tab stops.
         // Override the advance width using the font's configured tab size.
@@ -1615,7 +1634,13 @@ struct RowBreakCandidates {
 }
 
 impl RowBreakCandidates {
+    /// Consider breaking the row after `glyphs[0]`, which sits at `index` in the paragraph.
     fn add(&mut self, index: usize, glyphs: &[Glyph]) {
+        // A zero-width glyph is a combining mark, or a character folded into the cluster
+        // bitmap before it: it belongs to the glyph in front of it, so no row may start with it.
+        if glyphs.get(1).is_some_and(|next| next.advance_width <= 0.0) {
+            return;
+        }
         let chr = glyphs[0].chr;
         const NON_BREAKING_SPACE: char = '\u{A0}';
         if chr.is_whitespace() && chr != NON_BREAKING_SPACE {
@@ -2167,6 +2192,35 @@ mod tests {
     }
 
     /// The same under a right-to-left override, where the shaper hands the acute back before its q.
+    #[test]
+    #[cfg(feature = "default_fonts")]
+    fn a_row_too_narrow_for_a_letter_keeps_the_letter_and_its_mark_together() {
+        let mut fonts = FontsImpl::new(TextOptions::default(), hack_only());
+        let q = layout_simple(&mut fonts, "q").rows[0].glyphs[0];
+
+        // Narrower than one `q`: every row overflows, and the only breaks left are between clusters.
+        let job = LayoutJob::simple(
+            "q\u{301}q\u{301}".to_owned(),
+            FontId::proportional(14.0),
+            Color32::WHITE,
+            q.advance_width - 1.0,
+        );
+        let wrapped = layout(&mut fonts, 1.0, Arc::new(job));
+
+        assert_eq!(wrapped.rows.len(), 2);
+        for placed_row in &wrapped.rows {
+            let chars: Vec<char> = placed_row
+                .row
+                .glyphs
+                .iter()
+                .map(|glyph| glyph.chr)
+                .collect();
+            assert_eq!(chars, ['q', '\u{301}'], "a row is a whole cluster");
+            let mark = placed_row.row.glyphs[1];
+            assert_eq!(mark.pos.x, placed_row.row.glyphs[0].max_x());
+        }
+    }
+
     #[test]
     #[cfg(feature = "default_fonts")]
     fn a_combining_mark_in_right_to_left_text_stays_with_its_base() {
