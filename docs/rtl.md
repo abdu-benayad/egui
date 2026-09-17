@@ -19,8 +19,10 @@ Logical start/end alignment is not implemented.
 
 Applications must install fonts that cover their scripts. The bundled default
 fonts used by the focused tests do not cover Hebrew. The validation report
-records one local Noto Naskh Arabic and Noto Sans Hebrew probe, but those host
-fonts are not reproducible repository fixtures yet.
+records one local Noto Naskh Arabic and Noto Sans Hebrew probe. The demo crate
+also ships pinned Noto Sans Arabic, Noto Sans Hebrew, and Noto Sans fixtures
+through `egui_demo_lib::rtl_font_fixtures`; these do not change epaint's
+production defaults.
 
 ## Logical text and visual glyphs
 

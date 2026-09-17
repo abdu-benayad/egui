@@ -27,9 +27,9 @@ successful compilation is not interaction or rendering evidence.
   SHA-256 `436900d5ad77d33e4234247f3076eaecd25b92b9bea0519514f684140e3566a7`.
 
 The Noto files above came from `/usr/share/fonts/truetype/noto/` and are not
-repository fixtures. Their results are valid for this machine and checksum only.
-The [reproducible font fixture task](https://taskum.com/project/egui-rtl-fixes/issue/rtl-docs-examples/task/04-reproducible-font-fixtures)
-must replace that host dependency before demos or snapshots claim portability.
+repository fixtures. Their E2 results are valid for this machine and checksum
+only. E5 records the separate portable fixtures used by demos and future
+snapshots.
 
 <a id="e1-bundled-font-bidi-layout"></a>
 ## E1: bundled-font bidi layout
@@ -134,6 +134,37 @@ Pinned source: [`bidi_levels`](https://github.com/abdu-benayad/egui/blob/c93e886
 [`AccessKit` direction](https://github.com/abdu-benayad/egui/blob/c93e8863e958507056415e2a6dace56e23ba5f3a/crates/egui/src/text_selection/accesskit_text.rs#L102-L148),
 and [`Layout::right_to_left`](https://github.com/emilk/egui/blob/7ba3dbc4b07e72dcc85697e8cb51dcc70b1c8a6f/crates/egui/src/layout.rs#L156-L164).
 
+<a id="e5-reproducible-font-fixtures"></a>
+## E5: reproducible font fixtures
+
+Metadata: the date, OS, toolchain, and source baseline are the environment
+above. The repository embeds unmodified static Noto Sans Arabic 2.013, Noto
+Sans Hebrew 3.001, and Noto Sans 2.015 files in `egui_demo_lib`; the fixture
+manifest records release archive URLs, paths, versions, font and archive
+SHA-256 values, and the included SIL OFL 1.1 files.
+
+Commands:
+
+```sh
+cargo test -p egui_demo_lib rtl_font_fixtures -- --nocapture
+cargo package -p egui_demo_lib --allow-dirty --list
+cargo check -p egui_demo_app --lib --target wasm32-unknown-unknown \
+  --no-default-features --features web_app,wgpu
+```
+
+Expected: integrity and license hashes match; the named fonts cover the
+Arabic, Persian, Urdu, Hebrew, Latin, digit, punctuation, and combining-mark
+corpus; `漢` is absent from the fixture fallback chain; missing and corrupt
+bytes return explicit errors; the crate package contains every font, license,
+manifest, and loader; the same `include_bytes!` loader compiles for wasm.
+
+Observed: all 3 `rtl_font_fixtures` tests passed. The first coverage probe
+correctly failed because the Arabic-specific font lacks Latin letters; adding
+the separately pinned Noto Sans 2.015 fixture removed that false assumption.
+The package listing contained all three TTFs, all three license files, the
+manifest, and `rtl_font_fixtures.rs`. The exact wasm check passed. No browser or
+pixel-rendering claim is derived from compilation.
+
 ## Per-case checklist
 
 | ID | Sample or operation | Exact steps | Expected result | Observed result | Status / method |
@@ -156,7 +187,7 @@ and [`Layout::right_to_left`](https://github.com/emilk/egui/blob/7ba3dbc4b07e72d
 | V16 | AccessKit RTL run | Build accessibility nodes for RTL and inspect direction/positions. | RTL direction and correct visual geometry. | Source always sets LTR. | **Unsupported**, E4 |
 | <a id="v17-ime-and-platform-input"></a>V17 | RTL IME composition | On each platform, compose marked RTL text under narrow wrapping; inspect candidate location, selection, commit, and cancel. | Composition range and candidate geometry follow the visual caret without text corruption. | No platform run. | **Untested** |
 | <a id="v18-native-platforms-and-renderers"></a>V18 | Native app and renderers | Run the future demo on Linux, Windows, macOS, Android, and iOS with each supported renderer; capture matching-baseline screenshots. | Shaping, order, caret, selection, and decoration pixels match the checklist. | No application or renderer run. | **Untested** |
-| <a id="v19-wasm-and-browser"></a>V19 | wasm/browser | Build the future web demo and execute V01-V17 in supported browsers. | Same text, caret, selection, IME, and font bytes as native. | No wasm build or browser run. | **Untested** |
+| <a id="v19-wasm-and-browser"></a>V19 | wasm/browser | Build the future web demo and execute V01-V17 in supported browsers. | Same text, caret, selection, IME, and font bytes as native. | The demo app and embedded fixture loader compile for wasm; no browser run. | **Untested**, E5 |
 | <a id="v20-uax-9-conformance"></a>V20 | UAX #9 conformance | Run pinned Unicode BidiTest.txt and BidiCharacterTest.txt through the layout resolver. | All declared-supported classes and paragraph levels pass; exclusions are enumerated. | No conformance runner or result. | **Untested** |
 | <a id="v21-performance-and-wasm-size"></a>V21 | Performance and wasm size | Benchmark representative LTR, pure RTL, and mixed paragraphs against `7ba3dbc4`; compare stripped wasm artifacts with identical features. | Regression budgets and exact byte delta are recorded. | No benchmark or artifact measurement. | **Untested** |
 | V22 | Rust documentation examples | Run `cargo test -p epaint -p egui --doc` at the exact commit. | All executable rustdoc examples compile and pass; pass count recorded. | 178 passed, 0 failed, 2 ignored (egui 172/0/1; epaint 6/0/1). | **Passed** |
