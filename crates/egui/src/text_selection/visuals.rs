@@ -143,23 +143,37 @@ fn selection_spans(
         return vec![Rangef::new(left, right)];
     }
 
-    let first = from.map_or(0, |column| column.0).min(row.glyphs.len());
-    let last = to
-        .map_or(row.glyphs.len(), |column| column.0)
-        .min(row.glyphs.len());
-    let mut glyph_spans: Vec<Rangef> = row.glyphs[first..last]
-        .iter()
-        .filter(|glyph| 0.0 < glyph.advance_width)
-        .map(|glyph| Rangef::new(glyph.pos.x, glyph.max_x()))
-        .collect();
-    glyph_spans.sort_by(|a, b| a.min.total_cmp(&b.min));
+    let first = from.map_or(0, |column| column.0);
+    let last = to.map_or(row.glyphs.len(), |column| column.0);
+    let selected = |i: usize| first <= i && i < last;
 
+    // The advancing glyphs in the order they appear on screen. Marks and
+    // continuation glyphs have no width of their own and are covered with their base.
+    let mut visual: Vec<usize> = (0..row.glyphs.len())
+        .filter(|&i| 0.0 < row.glyphs[i].advance_width)
+        .collect();
+    visual.sort_by(|&a, &b| row.glyphs[a].pos.x.total_cmp(&row.glyphs[b].pos.x));
+
+    // Each run of selected glyphs that are neighbors on screen is one span,
+    // reaching the next glyph on screen (letter spacing included), the way a
+    // left-to-right selection reaches the next caret.
     let mut spans: Vec<Rangef> = Vec::new();
-    for span in glyph_spans {
-        match spans.last_mut() {
-            Some(last) if span.min <= last.max + 0.5 => last.max = last.max.max(span.max),
-            _ => spans.push(span),
+    let mut k = 0;
+    while k < visual.len() {
+        if !selected(visual[k]) {
+            k += 1;
+            continue;
         }
+        let run_start = k;
+        while k < visual.len() && selected(visual[k]) {
+            k += 1;
+        }
+        let left = row.glyphs[visual[run_start]].pos.x;
+        let right = visual.get(k).map_or_else(
+            || row.glyphs[visual[k - 1]].max_x(),
+            |&next| row.glyphs[next].pos.x,
+        );
+        spans.push(Rangef::new(left, right));
     }
     if to.is_none() && 0.0 < newline_size {
         spans.push(Rangef::new(row.size.x, past_row_end));
@@ -402,10 +416,49 @@ mod tests {
 
         let spans = painted_spans(&galley, &painted, 0);
         assert_eq!(spans.len(), 1, "the three letters are contiguous on screen");
-        assert_eq!(spans[0], Rangef::new(left, right));
+        let next_on_screen = galley.rows[0].row.glyphs[7].pos.x; // the space after them
+        assert!(right <= next_on_screen);
+        assert_eq!(spans[0], Rangef::new(left, next_on_screen));
         assert!(
             0.0 < spans[0].span(),
             "the selection has width, not two carets at one x"
+        );
+    }
+
+    #[test]
+    fn selecting_spaced_right_to_left_letters_leaves_no_holes() {
+        let mut fonts = Fonts::new(TextOptions::default(), FontDefinitions::default());
+        let mut job = epaint::text::LayoutJob::simple(
+            "אבג".to_owned(),
+            FontId::proportional(14.0),
+            Color32::WHITE,
+            f32::INFINITY,
+        );
+        job.sections[0].format.extra_letter_spacing = 3.0;
+        let mut galley = fonts.with_pixels_per_point(1.0).layout_job(job);
+
+        let glyphs = &galley.rows[0].row.glyphs;
+        let left = glyphs.iter().map(|g| g.pos.x).fold(f32::INFINITY, f32::min);
+        let right = glyphs
+            .iter()
+            .map(Glyph::max_x)
+            .fold(f32::NEG_INFINITY, f32::max);
+        assert!(
+            glyphs.iter().map(|g| g.advance_width).sum::<f32>() < right - left,
+            "the letter spacing is between the letters"
+        );
+
+        let mut painted = Vec::new();
+        paint_text_selection(
+            &mut galley,
+            &Visuals::default(),
+            &CCursorRange::two(CCursor::new(0), CCursor::new(3)),
+            Some(&mut painted),
+        );
+        assert_eq!(
+            painted_spans(&galley, &painted, 0),
+            [Rangef::new(left, right)],
+            "one rectangle, letter spacing included"
         );
     }
 
