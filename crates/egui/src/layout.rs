@@ -89,6 +89,12 @@ impl Region {
 
 /// The layout of a [`Ui`][`crate::Ui`], e.g. "vertical & centered".
 ///
+/// A [`Layout`] controls physical widget placement. It does not set the
+/// direction of text inside those widgets. Ordinary child UIs inherit their
+/// parent's layout unless they explicitly override it, but this is not an
+/// application-wide direction policy and does not mirror every container or
+/// directional affordance.
+///
 /// ```
 /// # egui::__run_test_ui(|ui| {
 /// ui.with_layout(egui::Layout::right_to_left(egui::Align::TOP), |ui| {
@@ -152,6 +158,10 @@ impl Layout {
     /// Place elements horizontally, right to left.
     ///
     /// The `valign` parameter controls how to align elements vertically.
+    /// This changes physical widget placement only. It does not force RTL text
+    /// shaping or establish a locale. Ordinary child UIs inherit this layout
+    /// unless they explicitly override it, but containers that choose another
+    /// layout and directional affordances are not mirrored automatically.
     #[inline(always)]
     pub fn right_to_left(valign: Align) -> Self {
         Self {

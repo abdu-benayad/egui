@@ -22,6 +22,10 @@ pub struct RowVertexIndices {
 }
 
 /// Adds text selection rectangles to the galley.
+///
+/// The input range uses logical character indices. On the current bidi
+/// baseline this function emits one span per row and does not yet cover all
+/// discontiguous visual spans of a mixed-direction selection.
 pub fn paint_text_selection(
     galley: &mut Arc<Galley>,
     visuals: &Visuals,

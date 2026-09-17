@@ -17,6 +17,11 @@ use smallvec::SmallVec;
 ///
 /// Pass this to [`crate::FontsView::layout_job`].
 ///
+/// Paragraph direction is resolved automatically from the first strong
+/// character. There is currently no field for forcing a paragraph direction.
+/// [`Self::halign`] is physical left/center/right alignment; it does not mean
+/// logical start/end alignment.
+///
 /// ## Example:
 /// ```
 /// use epaint::{Color32, text::{LayoutJob, TextFormat}, FontFamily, FontId};
@@ -44,6 +49,21 @@ use smallvec::SmallVec;
 ///
 /// As you can see, constructing a [`LayoutJob`] is currently a lot of work.
 /// It would be nice to have a helper macro for it!
+///
+/// Alignment is physical, regardless of the text's resolved direction:
+///
+/// ```
+/// use epaint::{Color32, FontId, emath::Align, text::LayoutJob};
+///
+/// let mut job = LayoutJob::simple(
+///     "مرحبا 123".to_owned(),
+///     FontId::default(),
+///     Color32::WHITE,
+///     f32::INFINITY,
+/// );
+/// job.halign = Align::RIGHT;
+/// assert_eq!(job.halign, Align::RIGHT);
+/// ```
 #[derive(Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
 pub struct LayoutJob {
@@ -78,7 +98,10 @@ pub struct LayoutJob {
     /// Default: `true`.
     pub break_on_newline: bool,
 
-    /// How to horizontally align the text (`Align::LEFT`, `Align::Center`, `Align::RIGHT`).
+    /// How to physically align the text (`Align::LEFT`, `Align::Center`, `Align::RIGHT`).
+    ///
+    /// These values are not logical start/end alignment and do not change with
+    /// the paragraph's resolved direction.
     pub halign: Align,
 
     /// Justify text so that word-wrapped rows fill the whole [`TextWrapping::max_width`].
@@ -807,6 +830,10 @@ impl PlacedRow {
     }
 
     /// Same as [`Self::rect`] but excluding the `LayoutSection::leading_space`.
+    ///
+    /// On the current bidi baseline this uses the first logical glyph and can
+    /// be incorrect for a visually reordered RTL row. Use [`Self::rect`] or
+    /// inspect all glyph positions when exact visual bounds are required.
     pub fn rect_without_leading_space(&self) -> Rect {
         let x = self.pos.x + self.glyphs.first().map_or(0.0, |g| g.pos.x);
         let right = self.pos.x + self.size.x;
@@ -825,6 +852,29 @@ impl core::ops::Deref for PlacedRow {
     }
 }
 
+/// One laid-out row.
+///
+/// [`Self::glyphs`] stays in logical source order. In bidirectional rows the
+/// glyphs' x positions are in visual order, so iterating the vector does not
+/// necessarily visit glyphs from left to right.
+///
+/// ```
+/// use epaint::{Color32, FontId};
+/// use epaint::text::{FontDefinitions, Fonts, TextOptions};
+///
+/// let mut fonts = Fonts::new(TextOptions::default(), FontDefinitions::default());
+/// let galley = fonts.with_pixels_per_point(1.0).layout_no_wrap(
+///     "ab אב".to_owned(),
+///     FontId::default(),
+///     Color32::WHITE,
+/// );
+/// let row = &galley.rows[0].row;
+///
+/// assert_eq!(row.text(), "ab אב");
+/// let mut visual: Vec<_> = row.glyphs.iter().collect();
+/// visual.sort_by(|a, b| a.pos.x.total_cmp(&b.pos.x));
+/// assert_eq!(visual.iter().map(|glyph| glyph.chr).collect::<String>(), "ab בא");
+/// ```
 #[derive(Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
 pub struct Row {
@@ -835,7 +885,10 @@ pub struct Row {
     /// adjust `section_index` when concatting.
     pub(crate) section_index_at_start: u32,
 
-    /// One for each `char`.
+    /// One for each `char`, in logical source order.
+    ///
+    /// Use [`Glyph::pos`] to determine visual placement. Do not sort this
+    /// vector and then use its indices as source character indices.
     pub glyphs: Vec<Glyph>,
 
     /// Logical size based on font heights etc.
@@ -888,7 +941,10 @@ pub struct Glyph {
     pub chr: char,
 
     /// Baseline position, relative to the row.
-    /// Logical position: pos.y is the same for all chars of the same [`TextFormat`].
+    ///
+    /// `pos.x` is the visual position and can decrease as logical indices
+    /// increase in RTL runs. `pos.y` is the same for all characters of the
+    /// same [`TextFormat`].
     pub pos: Pos2,
 
     /// Logical width of the glyph.
@@ -974,7 +1030,7 @@ impl Row {
         CharIndex(self.glyphs.len())
     }
 
-    /// Closest char at the desired x coordinate in row-relative coordinates.
+    /// Closest logical char boundary at the desired x coordinate in row-relative coordinates.
     /// Returns something in the range `[0, char_count_excluding_newline()]`.
     ///
     /// Glyphs are in logical order but positioned in visual order (see
@@ -1005,10 +1061,13 @@ impl Row {
         }
     }
 
-    /// The x coordinate of a cursor placed before the char at `column`
+    /// The x coordinate of a cursor placed before the logical char at `column`
     /// (or after the last char if `column` is the char count), in row-relative coordinates.
     ///
     /// For a right-to-left glyph "before" is its right edge.
+    ///
+    /// This baseline has no bidi caret affinity and has known incorrect end
+    /// geometry for some mixed-direction rows.
     pub fn x_offset(&self, column: CharIndex) -> f32 {
         match self.glyphs.get(column.0) {
             Some(glyph) if glyph.is_rtl() => glyph.max_x(),
@@ -1199,7 +1258,10 @@ impl Galley {
         }
     }
 
-    /// Returns a 0-width Rect.
+    /// Returns a zero-width rectangle for a logical cursor.
+    ///
+    /// Bidi caret affinity is not represented, and mixed-direction end
+    /// positions have known limitations on this baseline.
     pub fn pos_from_layout_cursor(&self, layout_cursor: &LayoutCursor) -> Rect {
         let Some(row) = self.rows.get(layout_cursor.row) else {
             return self.end_pos();
@@ -1214,7 +1276,7 @@ impl Galley {
         self.pos_from_layout_cursor(&self.layout_from_cursor(cursor))
     }
 
-    /// Cursor at the given position within the galley.
+    /// Logical cursor at the given visual position within the galley.
     ///
     /// A cursor above the galley is considered
     /// same as a cursor at the start,
@@ -1270,7 +1332,7 @@ impl Galley {
 
 /// ## Cursor positions
 impl Galley {
-    /// Cursor to the first character.
+    /// Cursor to the first logical character.
     ///
     /// This is the same as [`CCursor::default`].
     #[inline]
@@ -1279,7 +1341,7 @@ impl Galley {
         CCursor::default()
     }
 
-    /// Cursor to one-past last character.
+    /// Cursor to one-past the last logical character.
     pub fn end(&self) -> CCursor {
         if self.rows.is_empty() {
             return Default::default();
@@ -1364,6 +1426,9 @@ impl Galley {
 /// ## Cursor positions
 impl Galley {
     #[expect(clippy::unused_self)]
+    /// Move one logical character toward the start of the source text.
+    ///
+    /// Despite the historical name, this is not visual-left movement in bidi text.
     pub fn cursor_left_one_character(&self, cursor: &CCursor) -> CCursor {
         if cursor.index == CharIndex::ZERO {
             Default::default()
@@ -1375,6 +1440,9 @@ impl Galley {
         }
     }
 
+    /// Move one logical character toward the end of the source text.
+    ///
+    /// Despite the historical name, this is not visual-right movement in bidi text.
     pub fn cursor_right_one_character(&self, cursor: &CCursor) -> CCursor {
         CCursor {
             index: (cursor.index + 1).min(self.end().index),
