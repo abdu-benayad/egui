@@ -21,14 +21,16 @@ the included OFL 1.1 terms; retain the font and license files together.
 
 Use `egui_demo_lib::rtl_font_fixtures::install(ctx)` once before showing the RTL
 demo. It validates the embedded files and all positive sample cmap entries,
-then installs the named `RTL demo font fallback` family in this order:
+then adds the named `RTL demo font fallback` family in this order:
 
 1. Noto Sans Arabic RTL fixture;
 2. Noto Sans Hebrew RTL fixture;
 3. Noto Sans RTL fixture for Latin text and common symbols;
 
-The existing proportional family is left unchanged, so opening the RTL demo
-does not change typography elsewhere in the demo application.
+Installation preserves every existing font definition and family. The existing
+proportional family is left unchanged, so opening the RTL demo does not change
+typography elsewhere in the host application. Repeated installation is
+idempotent.
 
 Together the fixtures cover Latin, European and Persian digits, punctuation,
 Arabic, Persian, Urdu, Hebrew, and combining marks. `POSITIVE_SAMPLES` in

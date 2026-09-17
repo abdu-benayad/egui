@@ -2871,6 +2871,50 @@ mod tests {
         }
     }
 
+    /// Executable evidence for the mixed-row end-caret limitation documented
+    /// in `docs/rtl-validation.md`. This should be updated to assert equality
+    /// when the caret fix lands.
+    #[test]
+    fn rtl_support_probe_end_caret_mixed_row() {
+        let mut fonts = test_fonts();
+        let galley = layout_simple(&mut fonts, "אב 12");
+        let row = &galley.rows[0].row;
+        let actual = galley.pos_from_cursor(galley.end()).min.x;
+        let expected = row.glyphs.last().unwrap().max_x();
+
+        eprintln!("mixed-row end caret: actual={actual}, expected={expected}");
+        assert_ne!(
+            actual, expected,
+            "the documented limitation was fixed; update the support matrix and turn this into a positive regression test"
+        );
+    }
+
+    /// Executable evidence for the logical-first-glyph row-bounds limitation
+    /// documented in `docs/rtl-validation.md`.
+    #[test]
+    fn rtl_support_probe_row_visual_bounds() {
+        let mut fonts = test_fonts();
+        let galley = layout_simple(&mut fonts, "אב");
+        let placed_row = &galley.rows[0];
+        let actual = placed_row.rect_without_leading_space();
+        let visual_left = placed_row
+            .glyphs
+            .iter()
+            .map(|glyph| glyph.pos.x)
+            .reduce(f32::min)
+            .unwrap();
+        let expected = Rect::from_min_max(
+            pos2(placed_row.pos.x + visual_left, placed_row.pos.y),
+            placed_row.rect().max,
+        );
+
+        eprintln!("pure-RTL trimmed bounds: actual={actual:?}, expected={expected:?}");
+        assert_ne!(
+            actual, expected,
+            "the documented limitation was fixed; update the support matrix and turn this into a positive regression test"
+        );
+    }
+
     fn measure_text(
         fonts: &mut FontsImpl,
         text: &str,

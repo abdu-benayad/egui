@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use egui::{FontData, FontDefinitions, FontFamily};
+use egui::{FontData, FontDefinitions, FontFamily, FontInsert, FontPriority, InsertFontFamily};
 
 pub const ARABIC_FONT_NAME: &str = "Noto Sans Arabic RTL fixture";
 pub const HEBREW_FONT_NAME: &str = "Noto Sans Hebrew RTL fixture";
@@ -214,7 +214,29 @@ pub fn font_definitions() -> Result<FontDefinitions, RtlFontFixtureError> {
 
 /// Install the shared RTL demo fixtures.
 pub fn install(ctx: &egui::Context) -> Result<(), RtlFontFixtureError> {
-    ctx.set_fonts(font_definitions()?);
+    validate_fixture_bytes(ARABIC_FONT_BYTES, HEBREW_FONT_BYTES, LATIN_FONT_BYTES)?;
+
+    for (name, bytes) in [
+        (ARABIC_FONT_NAME, ARABIC_FONT_BYTES),
+        (HEBREW_FONT_NAME, HEBREW_FONT_BYTES),
+        (LATIN_FONT_NAME, LATIN_FONT_BYTES),
+    ] {
+        ctx.add_font(FontInsert::new(
+            name,
+            FontData::from_static(bytes),
+            vec![
+                InsertFontFamily {
+                    family: FontFamily::Name(RTL_FONT_FAMILY_NAME.into()),
+                    priority: FontPriority::Lowest,
+                },
+                InsertFontFamily {
+                    family: FontFamily::Name(name.into()),
+                    priority: FontPriority::Lowest,
+                },
+            ],
+        ));
+    }
+
     Ok(())
 }
 
@@ -307,5 +329,64 @@ mod tests {
             validate_fixture_bytes(ARABIC_FONT_BYTES, HEBREW_FONT_BYTES, &[0, 1, 2, 3]),
             Err(RtlFontFixtureError::InvalidFont(LATIN_FONT_NAME))
         );
+    }
+
+    #[test]
+    fn rtl_font_fixtures_install_preserves_host_fonts_and_families() {
+        const HOST_FONT_NAME: &str = "host custom font";
+        let host_family = FontFamily::Name("host custom family".into());
+
+        let mut host_definitions = FontDefinitions::default();
+        let proportional_before = host_definitions.families[&FontFamily::Proportional].clone();
+        host_definitions.font_data.insert(
+            HOST_FONT_NAME.to_owned(),
+            Arc::new(FontData::from_static(LATIN_FONT_BYTES)),
+        );
+        host_definitions
+            .families
+            .insert(host_family.clone(), vec![HOST_FONT_NAME.to_owned()]);
+
+        let ctx = egui::Context::default();
+        ctx.set_fonts(host_definitions);
+        let mut output = ctx.run_ui(Default::default(), |_| {});
+        output.textures_delta.clear();
+
+        install(&ctx).unwrap();
+        let mut output = ctx.run_ui(Default::default(), |_| {});
+        output.textures_delta.clear();
+
+        // Installing twice is harmless when both the app wrapper and the demo
+        // itself request the fixtures before rendering.
+        install(&ctx).unwrap();
+        let mut output = ctx.run_ui(Default::default(), |_| {});
+        output.textures_delta.clear();
+
+        ctx.fonts(|fonts| {
+            let definitions = fonts.definitions();
+            assert!(definitions.font_data.contains_key(HOST_FONT_NAME));
+            assert_eq!(
+                definitions.families[&host_family],
+                [HOST_FONT_NAME.to_owned()]
+            );
+            assert_eq!(
+                definitions.families[&FontFamily::Proportional],
+                proportional_before
+            );
+            assert_eq!(
+                definitions.families[&FontFamily::Name(RTL_FONT_FAMILY_NAME.into())],
+                [
+                    ARABIC_FONT_NAME.to_owned(),
+                    HEBREW_FONT_NAME.to_owned(),
+                    LATIN_FONT_NAME.to_owned(),
+                ]
+            );
+            assert_eq!(
+                definitions.families[&FontFamily::Name(RTL_FONT_FAMILY_NAME.into())]
+                    .iter()
+                    .filter(|name| name.as_str() == ARABIC_FONT_NAME)
+                    .count(),
+                1
+            );
+        });
     }
 }
