@@ -352,11 +352,12 @@ mod tests {
         output.textures_delta.clear();
 
         install(&ctx).unwrap();
+        // This second call happens before pending fonts become active.
+        install(&ctx).unwrap();
         let mut output = ctx.run_ui(Default::default(), |_| {});
         output.textures_delta.clear();
 
-        // Installing twice is harmless when both the app wrapper and the demo
-        // itself request the fixtures before rendering.
+        // Installing again after activation is also harmless.
         install(&ctx).unwrap();
         let mut output = ctx.run_ui(Default::default(), |_| {});
         output.textures_delta.clear();

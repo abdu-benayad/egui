@@ -2388,21 +2388,18 @@ impl Context {
     pub fn add_font(&self, new_font: FontInsert) {
         profiling::function_scope!();
 
-        let mut update_fonts = true;
-
-        self.read(|ctx| {
-            if let Some(current_fonts) = ctx.fonts.as_ref()
-                && current_fonts
-                    .definitions()
-                    .font_data
-                    .contains_key(&new_font.name)
-            {
-                update_fonts = false; // no need to update
-            }
+        let is_installed = self.read(|ctx| {
+            ctx.fonts
+                .as_ref()
+                .is_some_and(|fonts| fonts.definitions().font_data.contains_key(&new_font.name))
         });
 
-        if update_fonts {
-            self.memory_mut(|mem| mem.add_fonts.push(new_font));
+        if !is_installed {
+            self.memory_mut(|mem| {
+                if !mem.add_fonts.iter().any(|font| font.name == new_font.name) {
+                    mem.add_fonts.push(new_font);
+                }
+            });
         }
     }
 
