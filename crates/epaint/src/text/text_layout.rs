@@ -2065,6 +2065,31 @@ mod tests {
         }
     }
 
+    #[test]
+    fn end_caret_of_a_bidi_row_follows_the_last_logical_glyph() {
+        let mut fonts = test_fonts();
+        let galley = layout_simple(&mut fonts, "אב 12");
+        let row = &galley.rows[0].row;
+        let two = &row.glyphs[4];
+        assert!(!two.is_rtl());
+        assert!(
+            two.max_x() < row.glyphs[0].pos.x,
+            "the digits sit left of the Hebrew in a right-to-left paragraph"
+        );
+        assert_eq!(row.x_offset(CharIndex(5)), two.max_x());
+        assert_eq!(row.char_at(two.max_x()), CharIndex(5));
+
+        for i in 0..=5 {
+            let cursor = CCursor {
+                index: CharIndex(i),
+                prefer_next_row: false,
+            };
+            let rect = galley.pos_from_cursor(cursor);
+            let back = galley.cursor_from_pos(rect.center().to_vec2());
+            assert_eq!(back.index.0, i, "cursor round-trip at {i}");
+        }
+    }
+
     /// A combining mark is a zero-width glyph after its base; it must move with the base.
     #[test]
     fn marks_travel_with_their_base_when_a_row_is_reordered() {
@@ -2130,6 +2155,17 @@ mod tests {
         assert_eq!(
             row.size.x, plain.rows[0].row.size.x,
             "the acutes add no width"
+        );
+
+        // A click lands on cluster boundaries, never between a q and its acute:
+        for (column, x) in [(0, q1.pos.x), (2, q2.pos.x), (4, row.size.x)] {
+            assert_eq!(row.x_offset(CharIndex(column)), x);
+            assert_eq!(row.char_at(x), CharIndex(column), "click at {x}");
+        }
+        assert_eq!(
+            row.char_at(q1.max_x() - 1.0),
+            CharIndex(2),
+            "right half of the first q"
         );
 
         // Wrapped one letter per row, each row is still as wide as its letter:
@@ -2224,6 +2260,19 @@ mod tests {
             mark1.pos.x + mark1.uv_rect.offset.x < q1.max_x(),
             "the first acute is painted over the first q"
         );
+        assert_eq!(
+            row.x_offset(CharIndex(5)),
+            q2.pos.x,
+            "the end caret is left of the second q"
+        );
+        for column in [1, 3, 5] {
+            let x = row.x_offset(CharIndex(column));
+            assert_eq!(
+                row.char_at(x),
+                CharIndex(column),
+                "round-trip at column {column}"
+            );
+        }
     }
 
     #[test]

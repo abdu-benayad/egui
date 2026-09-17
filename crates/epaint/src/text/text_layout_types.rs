@@ -982,41 +982,92 @@ impl Row {
     /// and then decides which side of it the cursor belongs on: for a
     /// left-to-right glyph the cursor _before_ it is on its left, for a
     /// right-to-left glyph it is on its right.
+    ///
+    /// Zero-width glyphs (combining marks, the continuation glyphs of a
+    /// ligature) belong to the advancing glyph before them, so the cursor
+    /// never lands between a base and its mark: "after" a glyph means after
+    /// its whole cluster.
+    ///
+    /// At the seam between a left-to-right and a right-to-left run two glyphs
+    /// are equally near; of the columns they suggest, the one whose own caret
+    /// ([`Self::x_offset`]) lands closest to `desired_x` wins, so that a caret
+    /// position round-trips.
     pub fn char_at(&self, desired_x: f32) -> CharIndex {
-        let mut nearest: Option<(f32, usize)> = None;
-        for (i, glyph) in self.glyphs.iter().enumerate() {
+        let has_advancing = self.glyphs.iter().any(|glyph| 0.0 < glyph.advance_width);
+        let is_candidate = |glyph: &Glyph| 0.0 < glyph.advance_width || !has_advancing;
+        let distance = |glyph: &Glyph| {
             let rect = glyph.logical_rect();
-            let distance = (rect.min.x - desired_x)
+            (rect.min.x - desired_x)
                 .max(desired_x - rect.max.x)
-                .max(0.0);
-            if nearest.is_none_or(|(best, _)| distance < best) {
-                nearest = Some((distance, i));
-            }
-        }
-        let Some((_, i)) = nearest else {
+                .max(0.0)
+        };
+        let Some(nearest) = self
+            .glyphs
+            .iter()
+            .filter(|glyph| is_candidate(glyph))
+            .map(distance)
+            .min_by(f32::total_cmp)
+        else {
             return CharIndex(0);
         };
-        let glyph = &self.glyphs[i];
-        let past_center = glyph.logical_rect().center().x <= desired_x;
-        if past_center == glyph.is_rtl() {
-            CharIndex(i)
-        } else {
-            CharIndex(i + 1)
-        }
+        let column_beside = |(i, glyph): (usize, &Glyph)| {
+            let past_center = glyph.logical_rect().center().x <= desired_x;
+            if past_center == glyph.is_rtl() {
+                CharIndex(i)
+            } else {
+                CharIndex(self.cluster_end(i))
+            }
+        };
+        let caret_error = |column: &CharIndex| (self.x_offset(*column) - desired_x).abs();
+        self.glyphs
+            .iter()
+            .enumerate()
+            .filter(|(_, glyph)| is_candidate(glyph) && distance(glyph) == nearest)
+            .map(column_beside)
+            .min_by(|a, b| caret_error(a).total_cmp(&caret_error(b)))
+            .unwrap_or(CharIndex(0))
+    }
+
+    /// The column after glyph `i` and the zero-width glyphs that follow it
+    /// (its combining marks, the continuation glyphs of its ligature).
+    fn cluster_end(&self, i: usize) -> usize {
+        self.glyphs[i + 1..]
+            .iter()
+            .position(|glyph| 0.0 < glyph.advance_width)
+            .map_or(self.glyphs.len(), |n| i + 1 + n)
     }
 
     /// The x coordinate of a cursor placed before the char at `column`
     /// (or after the last char if `column` is the char count), in row-relative coordinates.
     ///
-    /// For a right-to-left glyph "before" is its right edge.
+    /// In a row with right-to-left text a cursor sits on the leading edge of
+    /// the glyph at `column`, which for a right-to-left glyph is its right
+    /// edge. A column inside a cluster (after a base, before its marks) or past
+    /// the end sits on the trailing edge of the last advancing glyph before it,
+    /// which in such a row need not be the row's right edge.
     pub fn x_offset(&self, column: CharIndex) -> f32 {
+        if !self.glyphs.iter().any(Glyph::is_rtl) {
+            return self
+                .glyphs
+                .get(column.0)
+                .map_or(self.size.x, |glyph| glyph.pos.x);
+        }
         match self.glyphs.get(column.0) {
-            Some(glyph) if glyph.is_rtl() => glyph.max_x(),
-            Some(glyph) => glyph.pos.x,
-            None => match self.glyphs.last() {
-                Some(last) if last.is_rtl() => last.pos.x,
-                _ => self.size.x,
-            },
+            Some(glyph) if 0.0 < glyph.advance_width => {
+                if glyph.is_rtl() {
+                    glyph.max_x()
+                } else {
+                    glyph.pos.x
+                }
+            }
+            at_column => {
+                let before = &self.glyphs[..column.0.min(self.glyphs.len())];
+                match before.iter().rev().find(|glyph| 0.0 < glyph.advance_width) {
+                    Some(base) if base.is_rtl() => base.pos.x,
+                    Some(base) => base.max_x(),
+                    None => at_column.map_or(self.size.x, |glyph| glyph.pos.x),
+                }
+            }
         }
     }
 
