@@ -2384,25 +2384,26 @@ impl Context {
     /// The new font will become active at the start of the next pass.
     /// This will keep the existing fonts.
     ///
+    /// The font name is its identity. If a font with the same name is already
+    /// installed or pending, this call is ignored. Use [`Self::set_fonts`] to
+    /// replace an existing font configuration.
+    ///
     /// This font will be used before any system fallback.
     pub fn add_font(&self, new_font: FontInsert) {
         profiling::function_scope!();
 
-        let mut update_fonts = true;
-
-        self.read(|ctx| {
-            if let Some(current_fonts) = ctx.fonts.as_ref()
-                && current_fonts
-                    .definitions()
-                    .font_data
-                    .contains_key(&new_font.name)
-            {
-                update_fonts = false; // no need to update
-            }
+        let is_installed = self.read(|ctx| {
+            ctx.fonts
+                .as_ref()
+                .is_some_and(|fonts| fonts.definitions().font_data.contains_key(&new_font.name))
         });
 
-        if update_fonts {
-            self.memory_mut(|mem| mem.add_fonts.push(new_font));
+        if !is_installed {
+            self.memory_mut(|mem| {
+                if !mem.add_fonts.iter().any(|font| font.name == new_font.name) {
+                    mem.add_fonts.push(new_font);
+                }
+            });
         }
     }
 
@@ -4712,9 +4713,65 @@ fn warn_if_rect_changes_id(
 
 #[cfg(test)]
 mod test {
-    use crate::{FontDefinitions, Panel};
+    use crate::{FontDefinitions, FontFamily, FontInsert, FontPriority, InsertFontFamily, Panel};
 
     use super::Context;
+
+    #[test]
+    fn add_font_keeps_the_first_same_name_insertion() {
+        let first_data = crate::FontData::from_static(include_bytes!(
+            "../../epaint_default_fonts/fonts/Ubuntu-Light.ttf"
+        ));
+        let second_data = crate::FontData::from_static(include_bytes!(
+            "../../epaint_default_fonts/fonts/Hack-Regular.ttf"
+        ));
+        let first_family = FontFamily::Name("first family".into());
+        let ignored_family = FontFamily::Name("ignored family".into());
+        let name = "same-name font";
+
+        let ctx = Context::default();
+        let output = ctx.run_ui(Default::default(), |_| {});
+        output.drop_without_applying_deltas();
+
+        ctx.add_font(FontInsert::new(
+            name,
+            first_data.clone(),
+            vec![InsertFontFamily {
+                family: first_family.clone(),
+                priority: FontPriority::Lowest,
+            }],
+        ));
+        ctx.add_font(FontInsert::new(
+            name,
+            second_data.clone(),
+            vec![InsertFontFamily {
+                family: ignored_family.clone(),
+                priority: FontPriority::Lowest,
+            }],
+        ));
+
+        let output = ctx.run_ui(Default::default(), |_| {});
+        output.drop_without_applying_deltas();
+
+        // The same rule applies once the first insertion is active.
+        ctx.add_font(FontInsert::new(
+            name,
+            second_data,
+            vec![InsertFontFamily {
+                family: ignored_family.clone(),
+                priority: FontPriority::Lowest,
+            }],
+        ));
+        let output = ctx.run_ui(Default::default(), |_| {});
+        output.drop_without_applying_deltas();
+
+        ctx.fonts(|fonts| {
+            let definitions = fonts.definitions();
+            assert_eq!(definitions.font_data[name].bytes(), first_data.bytes());
+            assert_eq!(definitions.families[&first_family], [name]);
+            assert!(!definitions.families.contains_key(&ignored_family));
+        });
+    }
 
     #[test]
     fn test_root_ui_with_begin_and_end_pass() {
